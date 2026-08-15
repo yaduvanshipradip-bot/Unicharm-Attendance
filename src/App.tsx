@@ -15,7 +15,6 @@ import {
   updateDoc,
 } from 'firebase/firestore';
 import {
-  Shield,
   UserPlus,
   LogOut,
   FileSpreadsheet,
