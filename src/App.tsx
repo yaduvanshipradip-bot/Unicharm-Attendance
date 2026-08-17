@@ -117,8 +117,8 @@ export default function App() {
       const userSnap = await getDocs(collection(db, 'users'));
       if (userSnap.empty) {
         await setDoc(doc(db, 'users', 'admin'), {
-          id: 'admin',
-          password: '123',
+          id: 'Unicharm',
+          password: 'Unicharm@123',
           role: 'admin',
         });
         setUsers([{ id: 'admin', password: '123', role: 'admin' }]);
