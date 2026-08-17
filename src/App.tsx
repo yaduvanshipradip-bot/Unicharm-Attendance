@@ -90,6 +90,8 @@ export default function App() {
   } | null>(null);
   const [manualEmpId, setManualEmpId] = useState('');
   const [showPopup, setShowPopup] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const ITEMS_PER_PAGE = 10;
 
   const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
   const cardPreviewRef = useRef<HTMLDivElement | null>(null);
@@ -105,22 +107,30 @@ export default function App() {
 
   const loadAllData = async () => {
     setLoading(true);
-    const empSnap = await getDocs(collection(db, 'employee'));
-    setEmployees(empSnap.docs.map((d) => d.data() as Employee));
-    const attSnap = await getDocs(collection(db, 'attendance'));
-    setAttendance(attSnap.docs.map((d) => d.data() as AttendanceRecord));
-    const userSnap = await getDocs(collection(db, 'users'));
-    if (userSnap.empty) {
-      await setDoc(doc(db, 'users', 'admin'), {
-        id: 'admin',
-        password: '123',
-        role: 'admin',
-      });
-      setUsers([{ id: 'admin', password: '123', role: 'admin' }]);
-    } else {
-      setUsers(userSnap.docs.map((d) => d.data() as User));
+    try {
+      const empSnap = await getDocs(collection(db, 'employee'));
+      setEmployees(empSnap.docs.map((d) => d.data() as Employee));
+
+      const attSnap = await getDocs(collection(db, 'attendance'));
+      setAttendance(attSnap.docs.map((d) => d.data() as AttendanceRecord));
+
+      const userSnap = await getDocs(collection(db, 'users'));
+      if (userSnap.empty) {
+        await setDoc(doc(db, 'users', 'admin'), {
+          id: 'admin',
+          password: '123',
+          role: 'admin',
+        });
+        setUsers([{ id: 'admin', password: '123', role: 'admin' }]);
+      } else {
+        setUsers(userSnap.docs.map((d) => d.data() as User));
+      }
+    } catch (error) {
+      console.error('Firebase Error:', error);
+      alert('Firebase se connect nahi ho pa raha. Rules check karo');
+    } finally {
+      setLoading(false); // <-- ye sabse jaruri hai
     }
-    setLoading(false);
   };
 
   const handleLogin = async (e?: React.FormEvent) => {
@@ -252,6 +262,20 @@ export default function App() {
     });
     const empExists = employees.find((e) => e.empId === empId);
     if (!empExists) return alert('Employee ID not found in system');
+
+    // VALIDATION: OUT se pehle IN hona chahiye
+    if (type === 'OUT') {
+      const todayRecords = attendance.filter(
+        (a) => a.empId === empId && a.date === dateStr
+      );
+      const lastRecord = todayRecords[todayRecords.length - 1];
+      if (!lastRecord || lastRecord.type !== 'IN') {
+        setScanResult({ empId: 'Error', type: 'FIRST IN REQUIRED' });
+        setShowPopup(true);
+        return;
+      }
+    }
+
     const newRecord: AttendanceRecord = {
       empId,
       date: dateStr,
@@ -263,7 +287,6 @@ export default function App() {
     setScanResult({ empId, type });
     setShowPopup(true);
     setManualEmpId('');
-    setTimeout(() => setShowPopup(false), 2000);
   };
 
   const startScanner = async (type: 'IN' | 'OUT') => {
@@ -276,10 +299,11 @@ export default function App() {
         .start(
           { facingMode: 'environment' },
           { fps: 10, qrbox: 250 },
-          (decodedText) => {
+          async (decodedText) => {
             try {
               const data = JSON.parse(decodedText);
-              markAttendance(data.empId, type);
+              await markAttendance(data.empId, type);
+              await html5QrCodeRef.current?.pause(); // bas pause, resume nahi
             } catch {
               alert('Invalid QR Code');
             }
@@ -289,7 +313,6 @@ export default function App() {
         .catch(() => alert('Camera permission denied'));
     }, 300);
   };
-
   const stopScanner = async () => {
     if (html5QrCodeRef.current) {
       try {
@@ -517,24 +540,26 @@ export default function App() {
     },
     toast: {
       position: 'fixed',
-      top: '20px',
+      top: '50%',
       left: '50%',
-      transform: 'translateX(-50%)',
+      transform: 'translate(-50%, -50%)', // <-- center me
       zIndex: 1000,
       backgroundColor: '#ffffff',
       border: '2px solid #000',
-      padding: '16px 24px',
+      padding: '24px 28px',
       borderRadius: '20px',
       boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.3)',
       display: 'flex',
+      flexDirection: 'column', // <-- column kar diya
       alignItems: 'center',
-      gap: '12px',
+      gap: '16px',
+      minWidth: '280px',
     },
   };
 
   const dynamicContainerStyle: React.CSSProperties = {
     ...styles.container,
-    backgroundImage: role === 'login' ? "url('/bg.jpg')" : 'none',
+    backgroundImage: role === 'login' ? "url('/bg.jpg')" : '#f8fafc',
     backgroundColor: role === 'login' ? 'transparent' : '#f8fafc',
   };
   const dynamicCardStyle: React.CSSProperties = {
@@ -552,23 +577,50 @@ export default function App() {
       {showPopup && scanResult && (
         <div style={styles.toast}>
           <CheckCircle2
-            color={scanResult.type === 'IN' ? '#059669' : '#dc2626'}
-            size={28}
+            color={
+              scanResult.type === 'IN'
+                ? '#059669'
+                : scanResult.type === 'OUT'
+                ? '#dc2626'
+                : '#d97706'
+            }
+            size={48}
           />
-          <div>
-            <div style={{ fontSize: '12px', fontWeight: '800', color: '#000' }}>
-              Emp ID: {scanResult.empId}
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: '14px', fontWeight: '800', color: '#000' }}>
+              {scanResult.empId !== 'Error'
+                ? `Emp ID: ${scanResult.empId}`
+                : ''}
             </div>
             <div
               style={{
-                fontSize: '16px',
+                fontSize: '18px',
                 fontWeight: '900',
-                color: scanResult.type === 'IN' ? '#059669' : '#dc2626',
+                color:
+                  scanResult.type === 'IN'
+                    ? '#059669'
+                    : scanResult.type === 'OUT'
+                    ? '#dc2626'
+                    : '#d97706',
+                marginTop: '4px',
               }}
             >
-              MARKED {scanResult.type} SUCCESSFUL
+              {scanResult.type === 'IN'
+                ? 'CHECK-IN SUCCESS'
+                : scanResult.type === 'OUT'
+                ? 'CHECK-OUT SUCCESS'
+                : 'FIRST CHECK-IN REQUIRED'}
             </div>
           </div>
+          <button
+            onClick={() => {
+              setShowPopup(false);
+              html5QrCodeRef.current?.resume(); // <-- camera wapas chalu
+            }}
+            style={{ ...styles.btnPrimary, margin: 0, width: '120px' }}
+          >
+            OK
+          </button>
         </div>
       )}
       <header style={styles.header}>
@@ -959,15 +1011,6 @@ export default function App() {
                 >
                   <Download size={18} /> Download Sticker
                 </button>
-                <button
-                  onClick={() => {
-                    setGeneratedQR(null);
-                    setHrPage('createEmp');
-                  }}
-                  style={styles.btnSecondary}
-                >
-                  Back
-                </button>
               </div>
             )}
           </div>
@@ -1201,29 +1244,156 @@ export default function App() {
               )}
               {guardPage === 'attendance' && (
                 <div>
-                  <h3 style={{ fontSize: '16px', fontWeight: '900' }}>
+                  <h3
+                    style={{
+                      fontSize: '16px',
+                      fontWeight: '900',
+                      marginBottom: '12px',
+                    }}
+                  >
                     Today's Log
                   </h3>
-                  {attendance
-                    .filter(
-                      (a) => a.date === new Date().toISOString().split('T')[0]
-                    )
-                    .slice(-10)
-                    .map((a, i) => (
-                      <div
-                        key={i}
-                        style={{
-                          padding: '8px',
-                          border: '1px solid #000',
-                          margin: '4px 0',
-                          borderRadius: 8,
-                        }}
-                      >
-                        {a.empId} - {a.time} - {a.type}
-                      </div>
-                    ))}
+
+                  {(() => {
+                    const todayData = attendance
+                      .filter(
+                        (a) => a.date === new Date().toISOString().split('T')[0]
+                      )
+                      .reverse();
+
+                    const totalPages = Math.ceil(
+                      todayData.length / ITEMS_PER_PAGE
+                    );
+                    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+                    const currentItems = todayData.slice(
+                      startIndex,
+                      startIndex + ITEMS_PER_PAGE
+                    );
+
+                    return (
+                      <>
+                        {currentItems.length === 0 ? (
+                          <div
+                            style={{
+                              textAlign: 'center',
+                              padding: '20px',
+                              color: '#666',
+                            }}
+                          >
+                            No records today
+                          </div>
+                        ) : (
+                          currentItems.map((a, i) => {
+                            const emp = employees.find(
+                              (e) => e.empId === a.empId
+                            );
+                            return (
+                              <div
+                                key={i}
+                                style={{
+                                  padding: '10px',
+                                  border: '1px solid #000',
+                                  margin: '6px 0',
+                                  borderRadius: 8,
+                                  background:
+                                    a.type === 'IN' ? '#ecfdf5' : '#fef2f2',
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    fontWeight: '900',
+                                    fontSize: '14px',
+                                  }}
+                                >
+                                  {emp?.name || 'Unknown'} - {a.empId}
+                                </div>
+                                <div
+                                  style={{ fontSize: '12px', color: '#555' }}
+                                >
+                                  Dept: {emp?.dept || '-'} | Time: {a.time}
+                                </div>
+                                <div
+                                  style={{
+                                    fontWeight: '900',
+                                    color:
+                                      a.type === 'IN' ? '#059669' : '#dc2626',
+                                    fontSize: '13px',
+                                  }}
+                                >
+                                  {a.type}
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+
+                        {/* PAGINATION BUTTONS */}
+                        {totalPages > 1 && (
+                          <div
+                            style={{
+                              display: 'flex',
+                              gap: '6px',
+                              justifyContent: 'center',
+                              marginTop: '12px',
+                              flexWrap: 'wrap',
+                            }}
+                          >
+                            <button
+                              onClick={() =>
+                                setCurrentPage((p) => Math.max(1, p - 1))
+                              }
+                              style={{
+                                ...styles.btnSecondary,
+                                width: 'auto',
+                                padding: '6px 12px',
+                              }}
+                            >
+                              Prev
+                            </button>
+                            {Array.from(
+                              { length: totalPages },
+                              (_, i) => i + 1
+                            ).map((page) => (
+                              <button
+                                key={page}
+                                onClick={() => setCurrentPage(page)}
+                                style={{
+                                  ...styles.btnSecondary,
+                                  width: 'auto',
+                                  padding: '6px 12px',
+                                  backgroundColor:
+                                    currentPage === page ? '#2563eb' : '#fff',
+                                  color: currentPage === page ? '#fff' : '#000',
+                                }}
+                              >
+                                {page}
+                              </button>
+                            ))}
+                            <button
+                              onClick={() =>
+                                setCurrentPage((p) =>
+                                  Math.min(totalPages, p + 1)
+                                )
+                              }
+                              style={{
+                                ...styles.btnSecondary,
+                                width: 'auto',
+                                padding: '6px 12px',
+                              }}
+                            >
+                              Next
+                            </button>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+
                   <button
-                    onClick={() => setGuardPage('home')}
+                    onClick={() => {
+                      setGuardPage('home');
+                      setCurrentPage(1);
+                    }}
                     style={styles.btnSecondary}
                   >
                     Back
@@ -1231,7 +1401,7 @@ export default function App() {
                 </div>
               )}
               {guardPage === 'headcount' && (
-                <div style={{ textAlign: 'center', padding: '16px 0' }}>
+                <div style={{ textAlign: 'center', padding: '20px 0' }}>
                   <div
                     style={{
                       fontSize: '14px',
@@ -1239,7 +1409,7 @@ export default function App() {
                       fontWeight: '900',
                     }}
                   >
-                    Currently Inside
+                    Employees Currently IN
                   </div>
                   <div
                     style={{
@@ -1250,6 +1420,15 @@ export default function App() {
                     }}
                   >
                     {getHeadCount()}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: '12px',
+                      color: '#555',
+                      marginBottom: '16px',
+                    }}
+                  >
+                    Total Staff: {employees.length}
                   </div>
                   <button
                     onClick={() => setGuardPage('home')}
