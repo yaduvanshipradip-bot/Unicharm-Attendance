@@ -13,9 +13,11 @@ import {
   doc,
   setDoc,
   updateDoc,
+  deleteDoc,
 } from 'firebase/firestore';
 import {
   UserPlus,
+  UserMinus,
   LogOut,
   FileSpreadsheet,
   Users,
@@ -25,9 +27,11 @@ import {
   Scan,
   Printer,
   Download,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 
-// TUMHARA FIREBASE CONFIG
+// FIREBASE CONFIG
 const firebaseConfig = {
   apiKey: 'AIzaSyB0CSGyhhMSWq4JGbm80UcQjkgoBsdF4js',
   authDomain: 'unicharm-attendence.firebaseapp.com',
@@ -66,16 +70,17 @@ export default function App() {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [loading, setLoading] = useState(false);
 
-  const [hrPage, setHrPage] = useState<'home' | 'createEmp' | 'headcount'>(
-    'home'
-  );
-  const [guardPage, setGuardPage] = useState<
-    'home' | 'in' | 'out' | 'attendance' | 'headcount'
-  >('home');
-  const [guardSubPage, setGuardSubPage] = useState<
-    '' | 'in-qr' | 'in-manual' | 'out-qr' | 'out-manual'
-  >('');
+  // HR & Guard pages
+  const [hrPage, setHrPage] = useState<'home' | 'createEmp' | 'removeEmp' | 'headcount'>('home');
+  const [guardPage, setGuardPage] = useState<'home' | 'in' | 'out' | 'attendance' | 'headcount'>('home');
+  const [guardSubPage, setGuardSubPage] = useState<'' | 'in-qr' | 'in-manual' | 'out-qr' | 'out-manual'>('');
 
+  // Password visibility states
+  const [showLoginPass, setShowLoginPass] = useState(false);
+  const [showNewUserPass, setShowNewUserPass] = useState(false);
+  const [showResetUserPass, setShowResetUserPass] = useState(false);
+
+  // Form states
   const [loginId, setLoginId] = useState('');
   const [loginPass, setLoginPass] = useState('');
   const [newUserId, setNewUserId] = useState('');
@@ -83,11 +88,9 @@ export default function App() {
   const [resetUserId, setResetUserId] = useState('');
   const [resetUserPass, setResetUserPass] = useState('');
   const [newEmp, setNewEmp] = useState({ name: '', empId: '', dept: '' });
+  const [removeEmpId, setRemoveEmpId] = useState('');
   const [generatedQR, setGeneratedQR] = useState<Employee | null>(null);
-  const [scanResult, setScanResult] = useState<{
-    empId: string;
-    type: string;
-  } | null>(null);
+  const [scanResult, setScanResult] = useState<{ empId: string; type: string } | null>(null);
   const [manualEmpId, setManualEmpId] = useState('');
   const [showPopup, setShowPopup] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
@@ -95,12 +98,20 @@ export default function App() {
 
   const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
   const cardPreviewRef = useRef<HTMLDivElement | null>(null);
+  const isScanningRef = useRef(false); // Locking mechanism for QR scanning
+  const attendanceRef = useRef(attendance); // Latest attendance ref to prevent stale state issue
+
   const COMPANY_NAME = 'Unicharm';
+
+  useEffect(() => {
+    attendanceRef.current = attendance;
+  }, [attendance]);
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
+
   useEffect(() => {
     loadAllData();
   }, []);
@@ -117,11 +128,11 @@ export default function App() {
       const userSnap = await getDocs(collection(db, 'users'));
       if (userSnap.empty) {
         await setDoc(doc(db, 'users', 'Unicharm'), {
-          id: 'Admin',
-          password: 'Admin@123',
+          id: 'Unicharm',
+          password: 'Unicharm@123',
           role: 'admin',
         });
-        setUsers([{ id: 'Admin', password: 'Admin@123', role: 'admin' }]);
+        setUsers([{ id: 'Unicharm', password: 'Unicharm@123', role: 'admin' }]);
       } else {
         setUsers(userSnap.docs.map((d) => d.data() as User));
       }
@@ -129,7 +140,7 @@ export default function App() {
       console.error('Firebase Error:', error);
       alert('Firebase se connect nahi ho pa raha. Rules check karo');
     } finally {
-      setLoading(false); // <-- ye sabse jaruri hai
+      setLoading(false);
     }
   };
 
@@ -201,12 +212,33 @@ export default function App() {
     setNewEmp({ name: '', empId: '', dept: '' });
   };
 
+  // REMOVE EMPLOYEE FUNCTION
+  const deleteEmployee = async () => {
+    if (!removeEmpId) return alert('Please enter Employee ID');
+    const empExists = employees.find((e) => e.empId === removeEmpId);
+    if (!empExists) return alert('Employee ID not found');
+
+    if (!window.confirm(`Are you sure you want to remove ${empExists.name} (${removeEmpId})?`)) return;
+
+    setLoading(true);
+    try {
+      await deleteDoc(doc(db, 'employee', removeEmpId));
+      setEmployees((prev) => prev.filter((e) => e.empId !== removeEmpId));
+      alert('Employee removed successfully');
+      setRemoveEmpId('');
+      setHrPage('home');
+    } catch (err) {
+      console.error(err);
+      alert('Error removing employee');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const triggerPrint = () => window.print();
 
   const downloadCardImage = (emp: Employee) => {
-    const qrCanvas = document.getElementById(
-      'employee-qr-canvas'
-    ) as HTMLCanvasElement;
+    const qrCanvas = document.getElementById('employee-qr-canvas') as HTMLCanvasElement;
     if (!qrCanvas) return alert('QR Code canvas not ready');
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
@@ -261,18 +293,24 @@ export default function App() {
       hour12: false,
     });
     const empExists = employees.find((e) => e.empId === empId);
-    if (!empExists) return alert('Employee ID not found in system');
+    if (!empExists) {
+      alert('Employee ID not found in system');
+      return false;
+    }
+
+    // Use ref to get latest attendance records during continuous scanning
+    const currentAttendance = attendanceRef.current;
 
     // VALIDATION: OUT se pehle IN hona chahiye
     if (type === 'OUT') {
-      const todayRecords = attendance.filter(
+      const todayRecords = currentAttendance.filter(
         (a) => a.empId === empId && a.date === dateStr
       );
       const lastRecord = todayRecords[todayRecords.length - 1];
       if (!lastRecord || lastRecord.type !== 'IN') {
         setScanResult({ empId: 'Error', type: 'FIRST IN REQUIRED' });
         setShowPopup(true);
-        return;
+        return false;
       }
     }
 
@@ -283,15 +321,18 @@ export default function App() {
       type,
     };
     await addDoc(collection(db, 'attendance'), newRecord);
-    setAttendance([...attendance, newRecord]);
+    setAttendance((prev) => [...prev, newRecord]);
     setScanResult({ empId, type });
     setShowPopup(true);
     setManualEmpId('');
+    return true;
   };
 
   const startScanner = async (type: 'IN' | 'OUT') => {
     await stopScanner();
     setGuardSubPage(type === 'IN' ? 'in-qr' : 'out-qr');
+    isScanningRef.current = false;
+
     setTimeout(() => {
       const readerId = type === 'IN' ? 'reader-in' : 'reader-out';
       html5QrCodeRef.current = new Html5Qrcode(readerId);
@@ -300,12 +341,15 @@ export default function App() {
           { facingMode: 'environment' },
           { fps: 10, qrbox: 250 },
           async (decodedText) => {
+            if (isScanningRef.current) return; // ignore multiple rapid triggers
+            isScanningRef.current = true;
+
             try {
               const data = JSON.parse(decodedText);
               await markAttendance(data.empId, type);
-              await html5QrCodeRef.current?.pause(); // bas pause, resume nahi
             } catch {
               alert('Invalid QR Code');
+              isScanningRef.current = false;
             }
           },
           () => {}
@@ -313,6 +357,7 @@ export default function App() {
         .catch(() => alert('Camera permission denied'));
     }, 300);
   };
+
   const stopScanner = async () => {
     if (html5QrCodeRef.current) {
       try {
@@ -320,6 +365,7 @@ export default function App() {
       } catch (e) {}
       html5QrCodeRef.current = null;
     }
+    isScanningRef.current = false;
     setGuardSubPage('');
   };
 
@@ -477,17 +523,14 @@ export default function App() {
       textAlign: 'left',
       boxSizing: 'border-box',
     },
-    label: {
-      fontSize: '13px',
-      fontWeight: '900',
-      color: '#000',
-      display: 'block',
-      marginBottom: '4px',
+    glassInputContainer: {
+      position: 'relative',
+      width: '100%',
+      margin: '4px 0 16px 0',
     },
     glassInput: {
       width: '100%',
-      padding: '12px 14px',
-      margin: '4px 0 16px 0',
+      padding: '12px 40px 12px 14px',
       display: 'block',
       backgroundColor: 'rgba(255, 255, 255, 0.85)',
       border: '2px solid #cbd5e1',
@@ -498,6 +541,20 @@ export default function App() {
       outline: 'none',
       boxSizing: 'border-box',
       textAlign: 'left',
+    },
+    eyeBtn: {
+      position: 'absolute',
+      right: '12px',
+      top: '50%',
+      transform: 'translateY(-50%)',
+      background: 'none',
+      border: 'none',
+      cursor: 'pointer',
+      color: '#475569',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 0,
     },
     btnPrimary: {
       width: '100%',
@@ -525,6 +582,19 @@ export default function App() {
       fontSize: '14px',
       cursor: 'pointer',
     },
+    btnDanger: {
+      width: '100%',
+      padding: '12px',
+      margin: '8px 0 0 0',
+      display: 'block',
+      backgroundColor: '#dc2626',
+      color: '#ffffff',
+      border: 'none',
+      borderRadius: '12px',
+      fontWeight: '800',
+      fontSize: '14px',
+      cursor: 'pointer',
+    },
     btnSecondary: {
       width: '100%',
       padding: '12px',
@@ -542,7 +612,7 @@ export default function App() {
       position: 'fixed',
       top: '50%',
       left: '50%',
-      transform: 'translate(-50%, -50%)', // <-- center me
+      transform: 'translate(-50%, -50%)',
       zIndex: 1000,
       backgroundColor: '#ffffff',
       border: '2px solid #000',
@@ -550,7 +620,7 @@ export default function App() {
       borderRadius: '20px',
       boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.3)',
       display: 'flex',
-      flexDirection: 'column', // <-- column kar diya
+      flexDirection: 'column',
       alignItems: 'center',
       gap: '16px',
       minWidth: '280px',
@@ -574,6 +644,8 @@ export default function App() {
   return (
     <div style={dynamicContainerStyle}>
       <style>{`@media print { @page { size: portrait; margin: 0; } body * { visibility: hidden!important; } #printable-card-area, #printable-card-area * { visibility: visible!important; } #printable-card-area { position: fixed!important; left: 10mm!important; top: 10mm!important; width: 260px!important; padding: 12px!important; border: 2px solid #000!important; background-color: #ffffff!important; } }`}</style>
+      
+      {/* Toast Popup on Scan */}
       {showPopup && scanResult && (
         <div style={styles.toast}>
           <CheckCircle2
@@ -615,7 +687,10 @@ export default function App() {
           <button
             onClick={() => {
               setShowPopup(false);
-              html5QrCodeRef.current?.resume(); // <-- camera wapas chalu
+              // Unlock scanning after brief delay so same card isn't scanned twice
+              setTimeout(() => {
+                isScanningRef.current = false;
+              }, 600);
             }}
             style={{ ...styles.btnPrimary, margin: 0, width: '120px' }}
           >
@@ -623,6 +698,7 @@ export default function App() {
           </button>
         </div>
       )}
+
       <header style={styles.header}>
         <div style={styles.headerLeft}>
           <img
@@ -651,6 +727,7 @@ export default function App() {
           </div>
         </div>
       </header>
+
       <main
         style={{
           flex: 1,
@@ -669,34 +746,51 @@ export default function App() {
               background: '#fff',
               padding: '10px 20px',
               borderRadius: 10,
+              zIndex: 100,
+              boxShadow: '0 4px 10px rgba(0,0,0,0.1)',
             }}
           >
             Loading...
           </div>
         )}
+
+        {/* LOGIN SCREEN */}
         {role === 'login' && (
           <div style={dynamicCardStyle}>
             <form onSubmit={handleLogin}>
-              <input
-                type="text"
-                placeholder="User ID"
-                value={loginId}
-                onChange={(e) => setLoginId(e.target.value)}
-                style={styles.glassInput}
-              />
-              <input
-                type="password"
-                placeholder="Password"
-                value={loginPass}
-                onChange={(e) => setLoginPass(e.target.value)}
-                style={styles.glassInput}
-              />
+              <div style={styles.glassInputContainer}>
+                <input
+                  type="text"
+                  placeholder="User ID"
+                  value={loginId}
+                  onChange={(e) => setLoginId(e.target.value)}
+                  style={{ ...styles.glassInput, paddingRight: '14px' }}
+                />
+              </div>
+              <div style={styles.glassInputContainer}>
+                <input
+                  type={showLoginPass ? 'text' : 'password'}
+                  placeholder="Password"
+                  value={loginPass}
+                  onChange={(e) => setLoginPass(e.target.value)}
+                  style={styles.glassInput}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowLoginPass(!showLoginPass)}
+                  style={styles.eyeBtn}
+                >
+                  {showLoginPass ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
               <button type="submit" style={styles.btnPrimary}>
                 Sign In
               </button>
             </form>
           </div>
         )}
+
+        {/* ADMIN SCREEN */}
         {role === 'admin' && (
           <div style={dynamicCardStyle}>
             <div
@@ -741,19 +835,30 @@ export default function App() {
               >
                 Create User
               </h3>
-              <input
-                placeholder="New User ID"
-                value={newUserId}
-                onChange={(e) => setNewUserId(e.target.value)}
-                style={styles.glassInput}
-              />
-              <input
-                type="password"
-                placeholder="Password"
-                value={newUserPass}
-                onChange={(e) => setNewUserPass(e.target.value)}
-                style={styles.glassInput}
-              />
+              <div style={styles.glassInputContainer}>
+                <input
+                  placeholder="New User ID"
+                  value={newUserId}
+                  onChange={(e) => setNewUserId(e.target.value)}
+                  style={{ ...styles.glassInput, paddingRight: '14px' }}
+                />
+              </div>
+              <div style={styles.glassInputContainer}>
+                <input
+                  type={showNewUserPass ? 'text' : 'password'}
+                  placeholder="Password"
+                  value={newUserPass}
+                  onChange={(e) => setNewUserPass(e.target.value)}
+                  style={styles.glassInput}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowNewUserPass(!showNewUserPass)}
+                  style={styles.eyeBtn}
+                >
+                  {showNewUserPass ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
               <div style={{ display: 'flex', gap: '10px' }}>
                 <button
                   onClick={() => createUser('hr')}
@@ -785,19 +890,30 @@ export default function App() {
               >
                 Reset Password
               </h3>
-              <input
-                placeholder="User ID"
-                value={resetUserId}
-                onChange={(e) => setResetUserId(e.target.value)}
-                style={styles.glassInput}
-              />
-              <input
-                type="password"
-                placeholder="New Password"
-                value={resetUserPass}
-                onChange={(e) => setResetUserPass(e.target.value)}
-                style={styles.glassInput}
-              />
+              <div style={styles.glassInputContainer}>
+                <input
+                  placeholder="User ID"
+                  value={resetUserId}
+                  onChange={(e) => setResetUserId(e.target.value)}
+                  style={{ ...styles.glassInput, paddingRight: '14px' }}
+                />
+              </div>
+              <div style={styles.glassInputContainer}>
+                <input
+                  type={showResetUserPass ? 'text' : 'password'}
+                  placeholder="New Password"
+                  value={resetUserPass}
+                  onChange={(e) => setResetUserPass(e.target.value)}
+                  style={styles.glassInput}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowResetUserPass(!showResetUserPass)}
+                  style={styles.eyeBtn}
+                >
+                  {showResetUserPass ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
               <button
                 onClick={resetPassword}
                 style={{ ...styles.btnPrimary, backgroundColor: '#d97706' }}
@@ -807,6 +923,8 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {/* HR SCREEN */}
         {role === 'hr' && (
           <div style={dynamicCardStyle}>
             {!generatedQR ? (
@@ -867,6 +985,12 @@ export default function App() {
                         <UserPlus size={18} /> Create Employee
                       </button>
                       <button
+                        onClick={() => setHrPage('removeEmp')}
+                        style={{ ...styles.btnSecondary, color: '#000000', borderColor: '#000000' }}
+                      >
+                        <UserMinus size={18} /> Remove Employee
+                      </button>
+                      <button
                         onClick={exportAttendance}
                         style={styles.btnSecondary}
                       >
@@ -880,6 +1004,7 @@ export default function App() {
                       </button>
                     </div>
                   )}
+
                   {hrPage === 'createEmp' && (
                     <div style={{ textAlign: 'left' }}>
                       <input
@@ -888,7 +1013,7 @@ export default function App() {
                         onChange={(e) =>
                           setNewEmp({ ...newEmp, name: e.target.value })
                         }
-                        style={styles.glassInput}
+                        style={{ ...styles.glassInput, paddingRight: '14px', margin: '4px 0 16px 0' }}
                       />
                       <input
                         placeholder="Employee ID"
@@ -896,7 +1021,7 @@ export default function App() {
                         onChange={(e) =>
                           setNewEmp({ ...newEmp, empId: e.target.value })
                         }
-                        style={styles.glassInput}
+                        style={{ ...styles.glassInput, paddingRight: '14px', margin: '4px 0 16px 0' }}
                       />
                       <input
                         placeholder="Department"
@@ -904,7 +1029,7 @@ export default function App() {
                         onChange={(e) =>
                           setNewEmp({ ...newEmp, dept: e.target.value })
                         }
-                        style={styles.glassInput}
+                        style={{ ...styles.glassInput, paddingRight: '14px', margin: '4px 0 16px 0' }}
                       />
                       <button onClick={saveEmployee} style={styles.btnSuccess}>
                         Generate Employee
@@ -917,6 +1042,31 @@ export default function App() {
                       </button>
                     </div>
                   )}
+
+                  {/* REMOVE EMPLOYEE FORM */}
+                  {hrPage === 'removeEmp' && (
+                    <div style={{ textAlign: 'left' }}>
+                      <h3 style={{ fontSize: '15px', fontWeight: '900', color: '#dc2626', marginBottom: '10px' }}>
+                        Remove Employee
+                      </h3>
+                      <input
+                        placeholder="Enter Employee ID"
+                        value={removeEmpId}
+                        onChange={(e) => setRemoveEmpId(e.target.value)}
+                        style={{ ...styles.glassInput, paddingRight: '14px', margin: '4px 0 16px 0' }}
+                      />
+                      <button onClick={deleteEmployee} style={styles.btnDanger}>
+                        Remove Employee
+                      </button>
+                      <button
+                        onClick={() => setHrPage('home')}
+                        style={styles.btnSecondary}
+                      >
+                        Back
+                      </button>
+                    </div>
+                  )}
+
                   {hrPage === 'headcount' && (
                     <div style={{ textAlign: 'center', padding: '20px 0' }}>
                       <div
@@ -1002,8 +1152,7 @@ export default function App() {
                   onClick={triggerPrint}
                   style={{ ...styles.btnPrimary, backgroundColor: '#4f46e5' }}
                 >
-                  <Printer size={18} />
-                  Print
+                  <Printer size={18} /> Print
                 </button>
                 <button
                   onClick={() => downloadCardImage(generatedQR)}
@@ -1011,10 +1160,19 @@ export default function App() {
                 >
                   <Download size={18} /> Download Sticker
                 </button>
+                {/* BACK BUTTON ON GENERATED CARD VIEW */}
+                <button
+                  onClick={() => setGeneratedQR(null)}
+                  style={styles.btnSecondary}
+                >
+                  Back
+                </button>
               </div>
             )}
           </div>
         )}
+
+        {/* SECURITY SCREEN */}
         {role === 'guard' && (
           <div style={dynamicCardStyle}>
             <div
@@ -1100,6 +1258,7 @@ export default function App() {
                   </button>
                 </div>
               )}
+
               {guardPage === 'in' && guardSubPage === '' && (
                 <div>
                   <button
@@ -1122,6 +1281,7 @@ export default function App() {
                   </button>
                 </div>
               )}
+
               {guardPage === 'in' && guardSubPage === 'in-qr' && (
                 <div>
                   <h3
@@ -1146,13 +1306,14 @@ export default function App() {
                   </button>
                 </div>
               )}
+
               {guardPage === 'in' && guardSubPage === 'in-manual' && (
                 <div style={{ textAlign: 'left' }}>
                   <input
                     placeholder="Employee ID"
                     value={manualEmpId}
                     onChange={(e) => setManualEmpId(e.target.value)}
-                    style={styles.glassInput}
+                    style={{ ...styles.glassInput, paddingRight: '14px', margin: '4px 0 16px 0' }}
                   />
                   <button
                     onClick={() => markAttendance(manualEmpId, 'IN')}
@@ -1171,6 +1332,7 @@ export default function App() {
                   </button>
                 </div>
               )}
+
               {guardPage === 'out' && guardSubPage === '' && (
                 <div>
                   <button
@@ -1193,6 +1355,7 @@ export default function App() {
                   </button>
                 </div>
               )}
+
               {guardPage === 'out' && guardSubPage === 'out-qr' && (
                 <div>
                   <h3
@@ -1217,13 +1380,14 @@ export default function App() {
                   </button>
                 </div>
               )}
+
               {guardPage === 'out' && guardSubPage === 'out-manual' && (
                 <div style={{ textAlign: 'left' }}>
                   <input
                     placeholder="Employee ID"
                     value={manualEmpId}
                     onChange={(e) => setManualEmpId(e.target.value)}
-                    style={styles.glassInput}
+                    style={{ ...styles.glassInput, paddingRight: '14px', margin: '4px 0 16px 0' }}
                   />
                   <button
                     onClick={() => markAttendance(manualEmpId, 'OUT')}
@@ -1242,6 +1406,7 @@ export default function App() {
                   </button>
                 </div>
               )}
+
               {guardPage === 'attendance' && (
                 <div>
                   <h3
@@ -1400,6 +1565,7 @@ export default function App() {
                   </button>
                 </div>
               )}
+
               {guardPage === 'headcount' && (
                 <div style={{ textAlign: 'center', padding: '20px 0' }}>
                   <div
