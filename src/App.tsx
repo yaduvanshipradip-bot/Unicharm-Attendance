@@ -29,6 +29,7 @@ import {
   Download,
   Eye,
   EyeOff,
+  ShieldAlert,
 } from 'lucide-react';
 
 // FIREBASE CONFIG
@@ -43,6 +44,11 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
+
+// CONSTANT LIMITS
+const MAX_HR_USERS = 2;
+const MAX_GUARD_USERS = 2;
+const MAX_EMPLOYEES = 500;
 
 interface Employee {
   name: string;
@@ -98,8 +104,8 @@ export default function App() {
 
   const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
   const cardPreviewRef = useRef<HTMLDivElement | null>(null);
-  const isScanningRef = useRef(false); // Locking mechanism for QR scanning
-  const attendanceRef = useRef(attendance); // Latest attendance ref to prevent stale state issue
+  const isScanningRef = useRef(false);
+  const attendanceRef = useRef(attendance);
 
   const COMPANY_NAME = 'Unicharm';
 
@@ -166,10 +172,25 @@ export default function App() {
     setLoading(false);
   };
 
+  // CREATE USER WITH STRICT LIMITS
   const createUser = async (roleToCreate: 'guard' | 'hr') => {
     if (!newUserId || !newUserPass) return alert('Fill ID and Password');
-    if (users.find((u) => u.id === newUserId))
+
+    const currentHRCount = users.filter((u) => u.role === 'hr').length;
+    const currentGuardCount = users.filter((u) => u.role === 'guard').length;
+
+    if (roleToCreate === 'hr' && currentHRCount >= MAX_HR_USERS) {
+      return alert(`LIMIT EXCEEDED: Aap maximum ${MAX_HR_USERS} HR users hi bana sakte hain.`);
+    }
+
+    if (roleToCreate === 'guard' && currentGuardCount >= MAX_GUARD_USERS) {
+      return alert(`LIMIT EXCEEDED: Aap maximum ${MAX_GUARD_USERS} Security users hi bana sakte hain.`);
+    }
+
+    if (users.find((u) => u.id === newUserId)) {
       return alert('User ID already exists');
+    }
+
     const newUser = {
       id: newUserId,
       password: newUserPass,
@@ -197,11 +218,18 @@ export default function App() {
     setResetUserPass('');
   };
 
+  // SAVE EMPLOYEE WITH STRICT LIMIT (MAX 500)
   const saveEmployee = async () => {
     if (!newEmp.name || !newEmp.empId || !newEmp.dept)
       return alert('All fields required');
+
+    if (employees.length >= MAX_EMPLOYEES) {
+      return alert(`LIMIT EXCEEDED: Maximum ${MAX_EMPLOYEES} employees limit reached. Aur naye employee nahi jode ja sakte.`);
+    }
+
     if (employees.find((e) => e.empId === newEmp.empId))
       return alert('Employee ID already exists');
+
     const empData: Employee = {
       ...newEmp,
       qrData: JSON.stringify({ empId: newEmp.empId, name: newEmp.name }),
@@ -212,7 +240,6 @@ export default function App() {
     setNewEmp({ name: '', empId: '', dept: '' });
   };
 
-  // REMOVE EMPLOYEE FUNCTION
   const deleteEmployee = async () => {
     if (!removeEmpId) return alert('Please enter Employee ID');
     const empExists = employees.find((e) => e.empId === removeEmpId);
@@ -298,10 +325,8 @@ export default function App() {
       return false;
     }
 
-    // Use ref to get latest attendance records during continuous scanning
     const currentAttendance = attendanceRef.current;
 
-    // VALIDATION: OUT se pehle IN hona chahiye
     if (type === 'OUT') {
       const todayRecords = currentAttendance.filter(
         (a) => a.empId === empId && a.date === dateStr
@@ -341,7 +366,7 @@ export default function App() {
           { facingMode: 'environment' },
           { fps: 10, qrbox: 250 },
           async (decodedText) => {
-            if (isScanningRef.current) return; // ignore multiple rapid triggers
+            if (isScanningRef.current) return;
             isScanningRef.current = true;
 
             try {
@@ -393,6 +418,7 @@ export default function App() {
     return `${hrs}h ${mins}m`;
   };
 
+  // ACCOUNTANT FRIENDLY MASTER ATTENDANCE EXPORT (WITH 8+ HRS GREEN HIGHLIGHT MARK)
   const exportAttendance = () => {
     if (employees.length === 0) return alert('No employees found');
     const now = new Date();
@@ -404,16 +430,29 @@ export default function App() {
       year: 'numeric',
     });
     const today = now.getDate();
+
+    // TITLE HEADERS FOR ACCOUNTANT
+    const titleRow = [`${COMPANY_NAME.toUpperCase()} - MASTER ATTENDANCE REGISTER`];
+    const subTitleRow = [`Month: ${monthName}`, `Generated Date: ${now.toLocaleDateString('en-IN')}`];
+    const emptyRow = [''];
+
+    // TABLE HEADERS
     const headers = ['Sr No', 'Emp ID', 'Employee Name', 'Department'];
     for (let day = 1; day <= daysInMonth; day++) {
-      headers.push(day.toString());
-      headers.push('');
+      headers.push(`Day ${day}`);
     }
-    headers.push('total');
-    const data: any[] = [headers];
+    headers.push('Total Present');
+    headers.push('Total Absent');
+    headers.push('Total Duty Hours');
+
+    const sheetData: any[] = [titleRow, subTitleRow, emptyRow, headers];
+
     employees.forEach((emp, index) => {
       const row = [index + 1, emp.empId, emp.name, emp.dept];
       let totalMonthMinutes = 0;
+      let presentDaysCount = 0;
+      let absentDaysCount = 0;
+
       for (let day = 1; day <= daysInMonth; day++) {
         const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(
           day
@@ -423,42 +462,59 @@ export default function App() {
         );
         const inRec = dayRecords.find((r) => r.type === 'IN');
         const outRec = dayRecords.find((r) => r.type === 'OUT');
+
         if (day > today) {
-          row.push('');
-          row.push('');
+          row.push('-'); // Future date
         } else if (inRec && outRec) {
           const mins = calculateWorkMinutes(inRec.time, outRec.time);
           totalMonthMinutes += mins;
-          row.push(`IN ${inRec.time}\nOUT ${outRec.time}`);
-          row.push(formatMinutes(mins));
+          presentDaysCount++;
+          const durationFormatted = formatMinutes(mins);
+
+          // 8+ Hours Duty Highlight Indicator (🟢) for Accountant
+          if (mins >= 480) {
+            row.push(`🟢 IN:${inRec.time} OUT:${outRec.time} (${durationFormatted}) [8h+ OK]`);
+          } else {
+            row.push(`🟡 IN:${inRec.time} OUT:${outRec.time} (${durationFormatted})`);
+          }
         } else if (inRec) {
-          row.push(`IN ${inRec.time}`);
-          row.push('-');
+          presentDaysCount++;
+          row.push(`IN:${inRec.time} (No OUT)`);
         } else {
-          row.push('A');
-          row.push('-');
+          absentDaysCount++;
+          row.push('A'); // Absent
         }
       }
+
+      row.push(`${presentDaysCount} Days`);
+      row.push(`${absentDaysCount} Days`);
       row.push(formatMinutes(totalMonthMinutes));
-      data.push(row);
+      sheetData.push(row);
     });
-    const ws = XLSX.utils.aoa_to_sheet(data);
+
+    const ws = XLSX.utils.aoa_to_sheet(sheetData);
+
+    // Column Width Formatting for clear readability
     const colWidths: any[] = [
-      { wch: 6 },
-      { wch: 10 },
-      { wch: 20 },
-      { wch: 14 },
+      { wch: 8 },  // Sr No
+      { wch: 12 }, // Emp ID
+      { wch: 22 }, // Name
+      { wch: 16 }, // Dept
     ];
+
     for (let day = 1; day <= daysInMonth; day++) {
-      colWidths.push({ wch: 12 });
-      colWidths.push({ wch: 8 });
+      colWidths.push({ wch: 28 }); // Daily logs width
     }
-    colWidths.push({ wch: 12 });
+    colWidths.push({ wch: 16 }); // Total Present
+    colWidths.push({ wch: 16 }); // Total Absent
+    colWidths.push({ wch: 20 }); // Total Hours
+
     ws['!cols'] = colWidths;
+
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, monthName);
-    XLSX.writeFile(wb, `Master_Attendance_${monthName}.xlsx`);
-    alert('Master Sheet Downloaded Successfully');
+    XLSX.utils.book_append_sheet(wb, ws, 'Attendance Register');
+    XLSX.writeFile(wb, `${COMPANY_NAME}_Attendance_${monthName}.xlsx`);
+    alert('Master Sheet Downloaded Successfully! (Green 🟢 = 8 Hours+ Completed)');
   };
 
   const styles: Record<string, React.CSSProperties> = {
@@ -625,6 +681,15 @@ export default function App() {
       gap: '16px',
       minWidth: '280px',
     },
+    badge: {
+      fontSize: '11px',
+      padding: '2px 8px',
+      borderRadius: '12px',
+      backgroundColor: '#e2e8f0',
+      color: '#1e293b',
+      fontWeight: 'bold',
+      marginLeft: 'auto',
+    },
   };
 
   const dynamicContainerStyle: React.CSSProperties = {
@@ -641,10 +706,13 @@ export default function App() {
         : '1px solid #cbd5e1',
   };
 
+  const hrCount = users.filter((u) => u.role === 'hr').length;
+  const guardCount = users.filter((u) => u.role === 'guard').length;
+
   return (
     <div style={dynamicContainerStyle}>
       <style>{`@media print { @page { size: portrait; margin: 0; } body * { visibility: hidden!important; } #printable-card-area, #printable-card-area * { visibility: visible!important; } #printable-card-area { position: fixed!important; left: 10mm!important; top: 10mm!important; width: 260px!important; padding: 12px!important; border: 2px solid #000!important; background-color: #ffffff!important; } }`}</style>
-      
+
       {/* Toast Popup on Scan */}
       {showPopup && scanResult && (
         <div style={styles.toast}>
@@ -687,7 +755,6 @@ export default function App() {
           <button
             onClick={() => {
               setShowPopup(false);
-              // Unlock scanning after brief delay so same card isn't scanned twice
               setTimeout(() => {
                 isScanningRef.current = false;
               }, 600);
@@ -810,7 +877,7 @@ export default function App() {
                   color: '#000',
                 }}
               >
-                Admin
+                Admin Panel
               </h2>
               <button
                 onClick={() => setRole('login')}
@@ -825,16 +892,24 @@ export default function App() {
               </button>
             </div>
             <div style={{ padding: '20px 0', textAlign: 'left' }}>
-              <h3
-                style={{
-                  fontSize: '14px',
-                  fontWeight: '900',
-                  marginBottom: '8px',
-                  color: '#000',
-                }}
-              >
-                Create User
-              </h3>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h3
+                  style={{
+                    fontSize: '14px',
+                    fontWeight: '900',
+                    marginBottom: '8px',
+                    color: '#000',
+                  }}
+                >
+                  Create User
+                </h3>
+              </div>
+
+              {/* LIMIT DISPLAY BADGES */}
+              <div style={{ fontSize: '11px', color: '#475569', marginBottom: '12px', fontWeight: 'bold' }}>
+                HR Users: {hrCount}/{MAX_HR_USERS} | Security Users: {guardCount}/{MAX_GUARD_USERS}
+              </div>
+
               <div style={styles.glassInputContainer}>
                 <input
                   placeholder="New User ID"
@@ -864,15 +939,16 @@ export default function App() {
                   onClick={() => createUser('hr')}
                   style={{ ...styles.btnPrimary, width: '48%' }}
                 >
-                  HR
+                  HR ({hrCount}/{MAX_HR_USERS})
                 </button>
                 <button
                   onClick={() => createUser('guard')}
                   style={{ ...styles.btnSuccess, width: '48%' }}
                 >
-                  Security
+                  Security ({guardCount}/{MAX_GUARD_USERS})
                 </button>
               </div>
+
               <hr
                 style={{
                   border: 'none',
@@ -982,7 +1058,7 @@ export default function App() {
                         onClick={() => setHrPage('createEmp')}
                         style={styles.btnSecondary}
                       >
-                        <UserPlus size={18} /> Create Employee
+                        <UserPlus size={18} /> Create Employee ({employees.length}/{MAX_EMPLOYEES})
                       </button>
                       <button
                         onClick={() => setHrPage('removeEmp')}
@@ -1007,6 +1083,9 @@ export default function App() {
 
                   {hrPage === 'createEmp' && (
                     <div style={{ textAlign: 'left' }}>
+                      <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#2563eb', marginBottom: '8px' }}>
+                        Total Employees Added: {employees.length} / {MAX_EMPLOYEES}
+                      </div>
                       <input
                         placeholder="Employee Name"
                         value={newEmp.name}
@@ -1043,7 +1122,6 @@ export default function App() {
                     </div>
                   )}
 
-                  {/* REMOVE EMPLOYEE FORM */}
                   {hrPage === 'removeEmp' && (
                     <div style={{ textAlign: 'left' }}>
                       <h3 style={{ fontSize: '15px', fontWeight: '900', color: '#dc2626', marginBottom: '10px' }}>
@@ -1086,7 +1164,7 @@ export default function App() {
                           margin: '10px 0',
                         }}
                       >
-                        {employees.length}
+                        {employees.length} <span style={{ fontSize: '16px', color: '#64748b' }}>/ {MAX_EMPLOYEES}</span>
                       </div>
                       <button
                         onClick={() => setHrPage('home')}
@@ -1160,7 +1238,6 @@ export default function App() {
                 >
                   <Download size={18} /> Download Sticker
                 </button>
-                {/* BACK BUTTON ON GENERATED CARD VIEW */}
                 <button
                   onClick={() => setGeneratedQR(null)}
                   style={styles.btnSecondary}
@@ -1192,7 +1269,7 @@ export default function App() {
                   color: '#000',
                 }}
               >
-                Security
+                Security Gate
               </h2>
               <button
                 onClick={() => setRole('login')}
@@ -1492,7 +1569,6 @@ export default function App() {
                           })
                         )}
 
-                        {/* PAGINATION BUTTONS */}
                         {totalPages > 1 && (
                           <div
                             style={{
