@@ -29,7 +29,7 @@ import {
   Download,
   Eye,
   EyeOff,
-  ShieldAlert,
+  QrCode,
 } from 'lucide-react';
 
 // FIREBASE CONFIG
@@ -77,7 +77,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
 
   // HR & Guard pages
-  const [hrPage, setHrPage] = useState<'home' | 'createEmp' | 'removeEmp' | 'headcount'>('home');
+  const [hrPage, setHrPage] = useState<'home' | 'createEmp' | 'removeEmp' | 'reprintEmp' | 'headcount'>('home');
   const [guardPage, setGuardPage] = useState<'home' | 'in' | 'out' | 'attendance' | 'headcount'>('home');
   const [guardSubPage, setGuardSubPage] = useState<'' | 'in-qr' | 'in-manual' | 'out-qr' | 'out-manual'>('');
 
@@ -95,6 +95,7 @@ export default function App() {
   const [resetUserPass, setResetUserPass] = useState('');
   const [newEmp, setNewEmp] = useState({ name: '', empId: '', dept: '' });
   const [removeEmpId, setRemoveEmpId] = useState('');
+  const [reprintEmpId, setReprintEmpId] = useState('');
   const [generatedQR, setGeneratedQR] = useState<Employee | null>(null);
   const [scanResult, setScanResult] = useState<{ empId: string; type: string } | null>(null);
   const [manualEmpId, setManualEmpId] = useState('');
@@ -172,7 +173,6 @@ export default function App() {
     setLoading(false);
   };
 
-  // CREATE USER WITH STRICT LIMITS
   const createUser = async (roleToCreate: 'guard' | 'hr') => {
     if (!newUserId || !newUserPass) return alert('Fill ID and Password');
 
@@ -218,13 +218,12 @@ export default function App() {
     setResetUserPass('');
   };
 
-  // SAVE EMPLOYEE WITH STRICT LIMIT (MAX 500)
   const saveEmployee = async () => {
     if (!newEmp.name || !newEmp.empId || !newEmp.dept)
       return alert('All fields required');
 
     if (employees.length >= MAX_EMPLOYEES) {
-      return alert(`LIMIT EXCEEDED: Maximum ${MAX_EMPLOYEES} employees limit reached. Aur naye employee nahi jode ja sakte.`);
+      return alert(`LIMIT EXCEEDED: Maximum ${MAX_EMPLOYEES} employees limit reached.`);
     }
 
     if (employees.find((e) => e.empId === newEmp.empId))
@@ -262,49 +261,88 @@ export default function App() {
     }
   };
 
+  const handleReprintCard = () => {
+    if (!reprintEmpId) return alert('Please enter Employee ID');
+    const emp = employees.find((e) => e.empId === reprintEmpId);
+    if (!emp) return alert('Employee ID not found in system!');
+
+    setGeneratedQR(emp);
+    setReprintEmpId('');
+  };
+
   const triggerPrint = () => window.print();
 
+  // DOWNLOAD STICKER IN PORTRAIT 4cm x 6cm RATIO (400px x 600px Canvas)
   const downloadCardImage = (emp: Employee) => {
     const qrCanvas = document.getElementById('employee-qr-canvas') as HTMLCanvasElement;
     if (!qrCanvas) return alert('QR Code canvas not ready');
+    
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    const width = 260;
-    const height = 380;
+
+    // Canvas size for 4 cm width x 6 cm height
+    const width = 400;
+    const height = 600;
     canvas.width = width;
     canvas.height = height;
+
+    // Background
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, width, height);
-    ctx.strokeStyle = '#000';
-    ctx.lineWidth = 3;
-    ctx.strokeRect(6, 6, width - 12, height - 12);
-    ctx.fillStyle = '#000';
-    ctx.font = 'bold 15px sans-serif';
+
+    // Outer Border
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 6;
+    ctx.strokeRect(12, 12, width - 24, height - 24);
+
     ctx.textAlign = 'center';
-    ctx.fillText(COMPANY_NAME, width / 2, 32);
+
+    // 1. Company Name
+    ctx.fillStyle = '#000000';
+    ctx.font = 'bold 30px sans-serif';
+    ctx.fillText(COMPANY_NAME.toUpperCase(), width / 2, 60);
+
     ctx.fillStyle = '#2563eb';
-    ctx.font = 'bold 10px sans-serif';
-    ctx.fillText('EMPLOYEE GATEPASS CARD', width / 2, 48);
-    ctx.strokeStyle = '#e5e7eb';
-    ctx.lineWidth = 1;
+    ctx.font = 'bold 14px sans-serif';
+    ctx.fillText('EMPLOYEE GATEPASS CARD', width / 2, 85);
+
+    ctx.strokeStyle = '#cbd5e1';
+    ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(15, 58);
-    ctx.lineTo(width - 15, 58);
+    ctx.moveTo(30, 100);
+    ctx.lineTo(width - 30, 100);
     ctx.stroke();
-    ctx.fillStyle = '#000';
-    ctx.font = 'bold 12px sans-serif';
-    ctx.fillText(`Emp Code: ${emp.empId}`, width / 2, 80);
-    ctx.fillText(`Name: ${emp.name}`, width / 2, 100);
-    ctx.fillText(`Dept: ${emp.dept}`, width / 2, 120);
-    const qrSize = 130;
+
+    // 2. ID
+    ctx.fillStyle = '#000000';
+    ctx.font = 'bold 22px sans-serif';
+    ctx.fillText(`ID: ${emp.empId}`, width / 2, 145);
+
+    // 3. Name
+    ctx.font = 'bold 20px sans-serif';
+    const displayName = emp.name.length > 18 ? emp.name.substring(0, 18) + '..' : emp.name;
+    ctx.fillText(`Name: ${displayName}`, width / 2, 190);
+
+    // 4. Department
+    ctx.font = 'bold 20px sans-serif';
+    ctx.fillText(`Dept: ${emp.dept}`, width / 2, 235);
+
+    // 5. QR Code
+    const qrSize = 250;
     const qrX = (width - qrSize) / 2;
-    const qrY = 145;
+    const qrY = 275;
     ctx.drawImage(qrCanvas, qrX, qrY, qrSize, qrSize);
+
+    // Bottom Footer
+    ctx.fillStyle = '#64748b';
+    ctx.font = 'bold 14px sans-serif';
+    ctx.fillText('Stick on back of ID Card', width / 2, 560);
+
     const image = canvas.toDataURL('image/png');
     const a = document.createElement('a');
     a.href = image;
-    a.download = `QR_Sticker_${emp.empId}.png`;
+    a.download = `Sticker_Portrait_4x6cm_${emp.empId}.png`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -418,7 +456,6 @@ export default function App() {
     return `${hrs}h ${mins}m`;
   };
 
-  // ACCOUNTANT FRIENDLY MASTER ATTENDANCE EXPORT (WITH 8+ HRS GREEN HIGHLIGHT MARK)
   const exportAttendance = () => {
     if (employees.length === 0) return alert('No employees found');
     const now = new Date();
@@ -431,12 +468,10 @@ export default function App() {
     });
     const today = now.getDate();
 
-    // TITLE HEADERS FOR ACCOUNTANT
     const titleRow = [`${COMPANY_NAME.toUpperCase()} - MASTER ATTENDANCE REGISTER`];
     const subTitleRow = [`Month: ${monthName}`, `Generated Date: ${now.toLocaleDateString('en-IN')}`];
     const emptyRow = [''];
 
-    // TABLE HEADERS
     const headers = ['Sr No', 'Emp ID', 'Employee Name', 'Department'];
     for (let day = 1; day <= daysInMonth; day++) {
       headers.push(`Day ${day}`);
@@ -464,14 +499,13 @@ export default function App() {
         const outRec = dayRecords.find((r) => r.type === 'OUT');
 
         if (day > today) {
-          row.push('-'); // Future date
+          row.push('-');
         } else if (inRec && outRec) {
           const mins = calculateWorkMinutes(inRec.time, outRec.time);
           totalMonthMinutes += mins;
           presentDaysCount++;
           const durationFormatted = formatMinutes(mins);
 
-          // 8+ Hours Duty Highlight Indicator (🟢) for Accountant
           if (mins >= 480) {
             row.push(`🟢 IN:${inRec.time} OUT:${outRec.time} (${durationFormatted}) [8h+ OK]`);
           } else {
@@ -482,7 +516,7 @@ export default function App() {
           row.push(`IN:${inRec.time} (No OUT)`);
         } else {
           absentDaysCount++;
-          row.push('A'); // Absent
+          row.push('A');
         }
       }
 
@@ -494,20 +528,19 @@ export default function App() {
 
     const ws = XLSX.utils.aoa_to_sheet(sheetData);
 
-    // Column Width Formatting for clear readability
     const colWidths: any[] = [
-      { wch: 8 },  // Sr No
-      { wch: 12 }, // Emp ID
-      { wch: 22 }, // Name
-      { wch: 16 }, // Dept
+      { wch: 8 },
+      { wch: 12 },
+      { wch: 22 },
+      { wch: 16 },
     ];
 
     for (let day = 1; day <= daysInMonth; day++) {
-      colWidths.push({ wch: 28 }); // Daily logs width
+      colWidths.push({ wch: 28 });
     }
-    colWidths.push({ wch: 16 }); // Total Present
-    colWidths.push({ wch: 16 }); // Total Absent
-    colWidths.push({ wch: 20 }); // Total Hours
+    colWidths.push({ wch: 16 });
+    colWidths.push({ wch: 16 });
+    colWidths.push({ wch: 20 });
 
     ws['!cols'] = colWidths;
 
@@ -681,15 +714,6 @@ export default function App() {
       gap: '16px',
       minWidth: '280px',
     },
-    badge: {
-      fontSize: '11px',
-      padding: '2px 8px',
-      borderRadius: '12px',
-      backgroundColor: '#e2e8f0',
-      color: '#1e293b',
-      fontWeight: 'bold',
-      marginLeft: 'auto',
-    },
   };
 
   const dynamicContainerStyle: React.CSSProperties = {
@@ -711,7 +735,37 @@ export default function App() {
 
   return (
     <div style={dynamicContainerStyle}>
-      <style>{`@media print { @page { size: portrait; margin: 0; } body * { visibility: hidden!important; } #printable-card-area, #printable-card-area * { visibility: visible!important; } #printable-card-area { position: fixed!important; left: 10mm!important; top: 10mm!important; width: 260px!important; padding: 12px!important; border: 2px solid #000!important; background-color: #ffffff!important; } }`}</style>
+      {/* PRINT STYLING STRICTLY FOR PORTRAIT 4CM X 6CM STICKER */}
+      <style>{`
+        @media print {
+          @page {
+            size: 4cm 6cm;
+            margin: 0;
+          }
+          body * {
+            visibility: hidden !important;
+          }
+          #printable-card-area, #printable-card-area * {
+            visibility: visible !important;
+          }
+          #printable-card-area {
+            position: fixed !important;
+            left: 0 !important;
+            top: 0 !important;
+            width: 4cm !important;
+            height: 6cm !important;
+            padding: 2mm !important;
+            border: 1px solid #000 !important;
+            background-color: #ffffff !important;
+            box-sizing: border-box !important;
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: center !important;
+            justify-content: flex-start !important;
+            text-align: center !important;
+          }
+        }
+      `}</style>
 
       {/* Toast Popup on Scan */}
       {showPopup && scanResult && (
@@ -905,7 +959,6 @@ export default function App() {
                 </h3>
               </div>
 
-              {/* LIMIT DISPLAY BADGES */}
               <div style={{ fontSize: '11px', color: '#475569', marginBottom: '12px', fontWeight: 'bold' }}>
                 HR Users: {hrCount}/{MAX_HR_USERS} | Security Users: {guardCount}/{MAX_GUARD_USERS}
               </div>
@@ -1066,6 +1119,14 @@ export default function App() {
                       >
                         <UserMinus size={18} /> Remove Employee
                       </button>
+
+                      <button
+                        onClick={() => setHrPage('reprintEmp')}
+                        style={{ ...styles.btnSecondary, backgroundColor: '#f8fafc' }}
+                      >
+                        <QrCode size={18} /> Reprint QR Card
+                      </button>
+
                       <button
                         onClick={exportAttendance}
                         style={styles.btnSecondary}
@@ -1145,6 +1206,32 @@ export default function App() {
                     </div>
                   )}
 
+                  {hrPage === 'reprintEmp' && (
+                    <div style={{ textAlign: 'left' }}>
+                      <h3 style={{ fontSize: '15px', fontWeight: '900', color: '#2563eb', marginBottom: '10px' }}>
+                        Reprint QR Card
+                      </h3>
+                      <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '8px' }}>
+                        Enter Employee ID to get their QR gatepass card again.
+                      </div>
+                      <input
+                        placeholder="Enter Employee ID"
+                        value={reprintEmpId}
+                        onChange={(e) => setReprintEmpId(e.target.value)}
+                        style={{ ...styles.glassInput, paddingRight: '14px', margin: '4px 0 16px 0' }}
+                      />
+                      <button onClick={handleReprintCard} style={styles.btnPrimary}>
+                        Search & Print Card
+                      </button>
+                      <button
+                        onClick={() => setHrPage('home')}
+                        style={styles.btnSecondary}
+                      >
+                        Back
+                      </button>
+                    </div>
+                  )}
+
                   {hrPage === 'headcount' && (
                     <div style={{ textAlign: 'center', padding: '20px 0' }}>
                       <div
@@ -1177,66 +1264,85 @@ export default function App() {
                 </div>
               </div>
             ) : (
+              /* CARD PREVIEW AREA - STRICTLY PORTRAIT 4CM X 6CM VERTICAL LAYOUT */
               <div style={{ textAlign: 'center' }}>
                 <div
                   id="printable-card-area"
                   ref={cardPreviewRef}
                   style={{
                     backgroundColor: '#ffffff',
-                    padding: '12px',
-                    borderRadius: '12px',
+                    padding: '10px',
+                    borderRadius: '8px',
                     border: '2px solid #000',
                     margin: '0 auto 16px auto',
                     textAlign: 'center',
-                    width: '260px',
+                    width: '160px', // Matches 4cm width
+                    height: '240px', // Matches 6cm height
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'flex-start',
+                    boxSizing: 'border-box',
                   }}
                 >
-                  <h2
+                  {/* 1. Company Name */}
+                  <div
                     style={{
-                      fontSize: '15px',
+                      fontSize: '13px',
                       fontWeight: '900',
                       textTransform: 'uppercase',
-                      marginBottom: '2px',
                       color: '#000',
+                      lineHeight: '1.2',
                     }}
                   >
                     {COMPANY_NAME}
-                  </h2>
+                  </div>
+
                   <div
                     style={{
-                      fontSize: '12px',
-                      color: '#000',
-                      fontWeight: '900',
-                      marginBottom: '10px',
+                      fontSize: '7px',
+                      color: '#2563eb',
+                      fontWeight: '800',
+                      marginBottom: '6px',
                     }}
                   >
-                    <div>
-                      <b>Emp Code:</b> {generatedQR.empId}
-                    </div>
-                    <div>
-                      <b>Name:</b> {generatedQR.name}
-                    </div>
-                    <div>
-                      <b>Dept:</b> {generatedQR.dept}
-                    </div>
+                    EMPLOYEE GATEPASS CARD
                   </div>
-                  <QRCodeCanvas
-                    id="employee-qr-canvas"
-                    value={generatedQR.qrData}
-                    size={130}
-                  />
+
+                  <hr style={{ width: '90%', border: 'none', borderTop: '1px solid #cbd5e1', margin: '0 0 6px 0' }} />
+
+                  {/* 2. ID, 3. Name, 4. Department */}
+                  <div style={{ fontSize: '9px', color: '#000', fontWeight: '800', lineHeight: '1.4', width: '100%' }}>
+                    <div><b>ID:</b> {generatedQR.empId}</div>
+                    <div><b>Name:</b> {generatedQR.name.length > 14 ? generatedQR.name.substring(0, 14) + '..' : generatedQR.name}</div>
+                    <div><b>Dept:</b> {generatedQR.dept}</div>
+                  </div>
+
+                  {/* 5. QR Code */}
+                  <div style={{ marginTop: '8px' }}>
+                    <QRCodeCanvas
+                      id="employee-qr-canvas"
+                      value={generatedQR.qrData}
+                      size={95}
+                    />
+                  </div>
                 </div>
+
+                <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#059669', marginBottom: '10px' }}>
+                  Portrait Sticker: 4 cm (W) x 6 cm (H)
+                </div>
+
                 <button
                   onClick={triggerPrint}
                   style={{ ...styles.btnPrimary, backgroundColor: '#4f46e5' }}
                 >
-                  <Printer size={18} /> Print
+                  <Printer size={18} /> Print 4x6cm Sticker
                 </button>
                 <button
                   onClick={() => downloadCardImage(generatedQR)}
                   style={styles.btnSuccess}
                 >
-                  <Download size={18} /> Download Sticker
+                  <Download size={18} /> Download Sticker Image
                 </button>
                 <button
                   onClick={() => setGeneratedQR(null)}
