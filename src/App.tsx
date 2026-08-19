@@ -1306,7 +1306,6 @@ export default function App() {
                       marginBottom: '6px',
                     }}
                   >
-                    EMPLOYEE GATEPASS CARD
                   </div>
 
                   <hr style={{ width: '90%', border: 'none', borderTop: '1px solid #cbd5e1', margin: '0 0 6px 0' }} />
