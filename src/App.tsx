@@ -456,6 +456,7 @@ export default function App() {
     return `${hrs}h ${mins}m`;
   };
 
+  // UPDATED & FIXED MASTER EXCEL EXPORT LOGIC
   const exportAttendance = () => {
     if (employees.length === 0) return alert('No employees found');
     const now = new Date();
@@ -503,17 +504,20 @@ export default function App() {
         } else if (inRec && outRec) {
           const mins = calculateWorkMinutes(inRec.time, outRec.time);
           totalMonthMinutes += mins;
-          presentDaysCount++;
           const durationFormatted = formatMinutes(mins);
 
+          // STRICT CONDITION: Must be >= 480 Mins (8 Hours) to be counted PRESENT
           if (mins >= 480) {
+            presentDaysCount++; // 8 Hours completed + OUT punch
             row.push(`🟢 IN:${inRec.time} OUT:${outRec.time} (${durationFormatted}) [8h+ OK]`);
           } else {
-            row.push(`🟡 IN:${inRec.time} OUT:${outRec.time} (${durationFormatted})`);
+            absentDaysCount++; // Less than 8 hours -> NOT PRESENT
+            row.push(`🟡 IN:${inRec.time} OUT:${outRec.time} (${durationFormatted}) [<8h Short]`);
           }
         } else if (inRec) {
-          presentDaysCount++;
-          row.push(`IN:${inRec.time} (No OUT)`);
+          // NO OUT RECORD -> NOT PRESENT
+          absentDaysCount++;
+          row.push(`🔴 IN:${inRec.time} (No OUT)`);
         } else {
           absentDaysCount++;
           row.push('A');
@@ -547,7 +551,7 @@ export default function App() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Attendance Register');
     XLSX.writeFile(wb, `${COMPANY_NAME}_Attendance_${monthName}.xlsx`);
-    alert('Master Sheet Downloaded Successfully! (Green 🟢 = 8 Hours+ Completed)');
+    alert('Master Sheet Downloaded Successfully! (Only 8h+ duty with OUT are counted as Present)');
   };
 
   const styles: Record<string, React.CSSProperties> = {
