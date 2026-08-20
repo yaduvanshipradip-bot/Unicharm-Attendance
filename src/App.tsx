@@ -272,7 +272,7 @@ export default function App() {
 
   const triggerPrint = () => window.print();
 
-  // DOWNLOAD STICKER IN PORTRAIT 4cm x 6cm RATIO (400px x 600px Canvas)
+  // DOWNLOAD STICKER IN EXACT 8cm x 6cm STICKER RATIO (600px x 800px Canvas)
   const downloadCardImage = (emp: Employee) => {
     const qrCanvas = document.getElementById('employee-qr-canvas') as HTMLCanvasElement;
     if (!qrCanvas) return alert('QR Code canvas not ready');
@@ -281,9 +281,9 @@ export default function App() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Canvas size for 4 cm width x 6 cm height
-    const width = 400;
-    const height = 600;
+    // Canvas size for 6 cm width x 8 cm height (Standard Portrait Sticker)
+    const width = 600;
+    const height = 800;
     canvas.width = width;
     canvas.height = height;
 
@@ -293,56 +293,56 @@ export default function App() {
 
     // Outer Border
     ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 6;
-    ctx.strokeRect(12, 12, width - 24, height - 24);
+    ctx.lineWidth = 8;
+    ctx.strokeRect(16, 16, width - 32, height - 32);
 
     ctx.textAlign = 'center';
 
     // 1. Company Name
     ctx.fillStyle = '#000000';
-    ctx.font = 'bold 30px sans-serif';
-    ctx.fillText(COMPANY_NAME.toUpperCase(), width / 2, 60);
+    ctx.font = 'bold 38px sans-serif';
+    ctx.fillText(COMPANY_NAME.toUpperCase(), width / 2, 80);
 
     ctx.fillStyle = '#2563eb';
-    ctx.font = 'bold 14px sans-serif';
-    ctx.fillText('EMPLOYEE GATEPASS CARD', width / 2, 85);
+    ctx.font = 'bold 20px sans-serif';
+    ctx.fillText('GATEPASS STICKER', width / 2, 115);
 
     ctx.strokeStyle = '#cbd5e1';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.moveTo(30, 100);
-    ctx.lineTo(width - 30, 100);
+    ctx.moveTo(40, 135);
+    ctx.lineTo(width - 40, 135);
     ctx.stroke();
 
     // 2. ID
     ctx.fillStyle = '#000000';
-    ctx.font = 'bold 22px sans-serif';
-    ctx.fillText(`ID: ${emp.empId}`, width / 2, 145);
+    ctx.font = 'bold 30px sans-serif';
+    ctx.fillText(`ID: ${emp.empId}`, width / 2, 190);
 
     // 3. Name
-    ctx.font = 'bold 20px sans-serif';
+    ctx.font = 'bold 26px sans-serif';
     const displayName = emp.name.length > 18 ? emp.name.substring(0, 18) + '..' : emp.name;
-    ctx.fillText(`Name: ${displayName}`, width / 2, 190);
+    ctx.fillText(`Name: ${displayName}`, width / 2, 245);
 
     // 4. Department
-    ctx.font = 'bold 20px sans-serif';
-    ctx.fillText(`Dept: ${emp.dept}`, width / 2, 235);
+    ctx.font = 'bold 26px sans-serif';
+    ctx.fillText(`Dept: ${emp.dept}`, width / 2, 300);
 
     // 5. QR Code
-    const qrSize = 250;
+    const qrSize = 340;
     const qrX = (width - qrSize) / 2;
-    const qrY = 275;
+    const qrY = 340;
     ctx.drawImage(qrCanvas, qrX, qrY, qrSize, qrSize);
 
     // Bottom Footer
     ctx.fillStyle = '#64748b';
-    ctx.font = 'bold 14px sans-serif';
-    ctx.fillText('Stick on back of ID Card', width / 2, 560);
+    ctx.font = 'bold 18px sans-serif';
+    ctx.fillText('Unicharm Security Approved', width / 2, 740);
 
     const image = canvas.toDataURL('image/png');
     const a = document.createElement('a');
     a.href = image;
-    a.download = `Sticker_Portrait_4x6cm_${emp.empId}.png`;
+    a.download = `Sticker_8x6cm_${emp.empId}.png`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -456,7 +456,7 @@ export default function App() {
     return `${hrs}h ${mins}m`;
   };
 
-  // UPDATED & FIXED MASTER EXCEL EXPORT LOGIC
+  // MASTER EXCEL EXPORT LOGIC
   const exportAttendance = () => {
     if (employees.length === 0) return alert('No employees found');
     const now = new Date();
@@ -551,7 +551,7 @@ export default function App() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Attendance Register');
     XLSX.writeFile(wb, `${COMPANY_NAME}_Attendance_${monthName}.xlsx`);
-    alert('Master Sheet Downloaded');
+    alert('Master Sheet Downloaded Successfully! (Only 8h+ duty with OUT are counted as Present)');
   };
 
   const styles: Record<string, React.CSSProperties> = {
@@ -609,7 +609,7 @@ export default function App() {
     },
     dateText: { fontSize: '12px', color: '#000', fontWeight: '700' },
     glassCard: {
-      maxWidth: '380px',
+      maxWidth: '420px',
       width: '100%',
       borderRadius: '24px',
       padding: '24px 20px',
@@ -739,11 +739,11 @@ export default function App() {
 
   return (
     <div style={dynamicContainerStyle}>
-      {/* PRINT STYLING STRICTLY FOR PORTRAIT 4CM X 6CM STICKER */}
+      {/* PERFECT PRINT STYLING FOR 8cm x 6cm STICKER PAPER */}
       <style>{`
         @media print {
           @page {
-            size: 4cm 6cm;
+            size: 6cm 8cm;
             margin: 0;
           }
           body * {
@@ -756,10 +756,10 @@ export default function App() {
             position: fixed !important;
             left: 0 !important;
             top: 0 !important;
-            width: 4cm !important;
-            height: 6cm !important;
-            padding: 2mm !important;
-            border: 1px solid #000 !important;
+            width: 6cm !important;
+            height: 8cm !important;
+            padding: 3mm !important;
+            border: 2px solid #000 !important;
             background-color: #ffffff !important;
             box-sizing: border-box !important;
             display: flex !important;
@@ -1268,78 +1268,81 @@ export default function App() {
                 </div>
               </div>
             ) : (
-              /* CARD PREVIEW AREA - STRICTLY PORTRAIT 4CM X 6CM VERTICAL LAYOUT */
+              /* CARD PREVIEW AREA - PERFECT 8CM X 6CM STICKER BOX */
               <div style={{ textAlign: 'center' }}>
                 <div
                   id="printable-card-area"
                   ref={cardPreviewRef}
                   style={{
                     backgroundColor: '#ffffff',
-                    padding: '10px',
-                    borderRadius: '8px',
+                    padding: '12px',
+                    borderRadius: '10px',
                     border: '2px solid #000',
                     margin: '0 auto 16px auto',
                     textAlign: 'center',
-                    width: '160px', // Matches 4cm width
-                    height: '240px', // Matches 6cm height
+                    width: '210px', // Perfectly scaled preview for 6cm
+                    height: '280px', // Perfectly scaled preview for 8cm
                     display: 'flex',
                     flexDirection: 'column',
                     alignItems: 'center',
-                    justifyContent: 'flex-start',
+                    justifyContent: 'space-between',
                     boxSizing: 'border-box',
                   }}
                 >
-                  {/* 1. Company Name */}
-                  <div
-                    style={{
-                      fontSize: '13px',
-                      fontWeight: '900',
-                      textTransform: 'uppercase',
-                      color: '#000',
-                      lineHeight: '1.2',
-                    }}
-                  >
-                    {COMPANY_NAME}
+                  {/* 1. Company Name & Header */}
+                  <div>
+                    <div
+                      style={{
+                        fontSize: '16px',
+                        fontWeight: '900',
+                        textTransform: 'uppercase',
+                        color: '#000',
+                        lineHeight: '1.1',
+                        letterSpacing: '0.5px',
+                      }}
+                    >
+                      {COMPANY_NAME}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: '9px',
+                        color: '#2563eb',
+                        fontWeight: '800',
+                        marginTop: '2px',
+                      }}
+                    >
+                      GATEPASS STICKER
+                    </div>
                   </div>
 
-                  <div
-                    style={{
-                      fontSize: '7px',
-                      color: '#2563eb',
-                      fontWeight: '800',
-                      marginBottom: '6px',
-                    }}
-                  >
-                  </div>
+                  <hr style={{ width: '90%', border: 'none', borderTop: '1px solid #cbd5e1', margin: '2px 0' }} />
 
-                  <hr style={{ width: '90%', border: 'none', borderTop: '1px solid #cbd5e1', margin: '0 0 6px 0' }} />
-
-                  {/* 2. ID, 3. Name, 4. Department */}
-                  <div style={{ fontSize: '9px', color: '#000', fontWeight: '800', lineHeight: '1.4', width: '100%' }}>
+                  {/* 2. Employee Details */}
+                  <div style={{ fontSize: '11px', color: '#000', fontWeight: '800', lineHeight: '1.4', width: '100%' }}>
                     <div><b>ID:</b> {generatedQR.empId}</div>
-                    <div><b>Name:</b> {generatedQR.name.length > 14 ? generatedQR.name.substring(0, 14) + '..' : generatedQR.name}</div>
+                    <div><b>Name:</b> {generatedQR.name.length > 16 ? generatedQR.name.substring(0, 16) + '..' : generatedQR.name}</div>
                     <div><b>Dept:</b> {generatedQR.dept}</div>
                   </div>
 
-                  {/* 5. QR Code */}
-                  <div style={{ marginTop: '8px' }}>
+                  {/* 3. QR Code */}
+                  <div style={{ margin: '4px 0' }}>
                     <QRCodeCanvas
                       id="employee-qr-canvas"
                       value={generatedQR.qrData}
-                      size={95}
+                      size={120}
                     />
                   </div>
                 </div>
 
                 <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#059669', marginBottom: '10px' }}>
-                  Portrait Sticker: 4 cm (W) x 6 cm (H)
+                  Sticker Print Size: 8 cm x 6 cm (Portrait)
                 </div>
 
                 <button
                   onClick={triggerPrint}
                   style={{ ...styles.btnPrimary, backgroundColor: '#4f46e5' }}
                 >
-                  <Printer size={18} /> Print 4x6cm Sticker
+                  <Printer size={18} /> Print 8x6cm Sticker
                 </button>
                 <button
                   onClick={() => downloadCardImage(generatedQR)}
