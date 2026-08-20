@@ -551,7 +551,7 @@ export default function App() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Attendance Register');
     XLSX.writeFile(wb, `${COMPANY_NAME}_Attendance_${monthName}.xlsx`);
-    alert('Master Sheet Downloaded Successfully! (Only 8h+ duty with OUT are counted as Present)');
+    alert('Master Sheet Downloaded');
   };
 
   const styles: Record<string, React.CSSProperties> = {
