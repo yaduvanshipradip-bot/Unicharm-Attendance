@@ -14,6 +14,7 @@ import {
   setDoc,
   updateDoc,
   deleteDoc,
+  getDoc,
 } from 'firebase/firestore';
 import {
   UserPlus,
@@ -30,6 +31,8 @@ import {
   Eye,
   EyeOff,
   QrCode,
+  Building2,
+  Smartphone,
 } from 'lucide-react';
 
 // FIREBASE CONFIG
@@ -46,35 +49,55 @@ const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
 // CONSTANT LIMITS
-const MAX_HR_USERS = 2;
-const MAX_GUARD_USERS = 2;
+const MAX_HR_USERS = 5;
+const MAX_GUARD_USERS = 5;
 const MAX_EMPLOYEES = 500;
 
+interface Company {
+  id: string; // Unique slug (e.g., 'tata-motors', 'sharma-factory')
+  name: string;
+  createdAt: string;
+}
+
 interface Employee {
+  companyId: string;
   name: string;
   empId: string;
   dept: string;
   qrData: string;
 }
+
 interface AttendanceRecord {
+  companyId: string;
   empId: string;
   date: string;
   time: string;
   type: 'IN' | 'OUT';
 }
+
 interface User {
   id: string;
+  companyId: string;
   password: string;
   role: 'admin' | 'hr' | 'guard';
 }
 
 export default function App() {
   const [role, setRole] = useState<'login' | 'admin' | 'hr' | 'guard'>('login');
+  const [authMode, setAuthMode] = useState<'login' | 'registerCompany'>('login');
+
+  // Multi-tenant Company State
+  const [companyId, setCompanyId] = useState<string>('');
+  const [companyName, setCompanyName] = useState<string>('GatePass Pro');
+
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [loading, setLoading] = useState(false);
+
+  // PWA Install prompt state
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
 
   // HR & Guard pages
   const [hrPage, setHrPage] = useState<'home' | 'createEmp' | 'removeEmp' | 'reprintEmp' | 'headcount'>('home');
@@ -87,16 +110,28 @@ export default function App() {
   const [showResetUserPass, setShowResetUserPass] = useState(false);
 
   // Form states
+  const [loginCompanyId, setLoginCompanyId] = useState('');
   const [loginId, setLoginId] = useState('');
   const [loginPass, setLoginPass] = useState('');
+
+  // New Company Registration Form
+  const [regCompanyId, setRegCompanyId] = useState('');
+  const [regCompanyName, setRegCompanyName] = useState('');
+  const [regAdminPass, setRegAdminPass] = useState('');
+
+  // Admin user manage states
   const [newUserId, setNewUserId] = useState('');
   const [newUserPass, setNewUserPass] = useState('');
   const [resetUserId, setResetUserId] = useState('');
   const [resetUserPass, setResetUserPass] = useState('');
+
+  // HR states
   const [newEmp, setNewEmp] = useState({ name: '', empId: '', dept: '' });
   const [removeEmpId, setRemoveEmpId] = useState('');
   const [reprintEmpId, setReprintEmpId] = useState('');
   const [generatedQR, setGeneratedQR] = useState<Employee | null>(null);
+
+  // Guard states
   const [scanResult, setScanResult] = useState<{ empId: string; type: string } | null>(null);
   const [manualEmpId, setManualEmpId] = useState('');
   const [showPopup, setShowPopup] = useState(false);
@@ -108,8 +143,6 @@ export default function App() {
   const isScanningRef = useRef(false);
   const attendanceRef = useRef(attendance);
 
-  const COMPANY_NAME = 'Unicharm';
-
   useEffect(() => {
     attendanceRef.current = attendance;
   }, [attendance]);
@@ -119,58 +152,146 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
 
+  // Listen for PWA Install Prompt
   useEffect(() => {
-    loadAllData();
+    const handleBeforeInstallPrompt = (e: any) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
   }, []);
 
-  const loadAllData = async () => {
+  const handleInstallClick = () => {
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      deferredPrompt.userChoice.then((choice: any) => {
+        if (choice.outcome === 'accepted') {
+          setDeferredPrompt(null);
+        }
+      });
+    } else {
+      alert('Aap browser ke 3 dots par click karke "Add to Home Screen" ya "Install App" kar sakte hain.');
+    }
+  };
+
+  // LOAD DATA FOR CURRENT LOGGED-IN COMPANY ONLY
+  const loadCompanyData = async (activeCompanyId: string) => {
     setLoading(true);
     try {
-      const empSnap = await getDocs(collection(db, 'employee'));
+      // 1. Fetch Company Profile
+      const compDoc = await getDoc(doc(db, 'companies', activeCompanyId));
+      if (compDoc.exists()) {
+        const cData = compDoc.data() as Company;
+        setCompanyName(cData.name);
+      }
+
+      // 2. Fetch Employees of this Company
+      const empQuery = query(collection(db, 'employee'), where('companyId', '==', activeCompanyId));
+      const empSnap = await getDocs(empQuery);
       setEmployees(empSnap.docs.map((d) => d.data() as Employee));
 
-      const attSnap = await getDocs(collection(db, 'attendance'));
+      // 3. Fetch Attendance of this Company
+      const attQuery = query(collection(db, 'attendance'), where('companyId', '==', activeCompanyId));
+      const attSnap = await getDocs(attQuery);
       setAttendance(attSnap.docs.map((d) => d.data() as AttendanceRecord));
 
-      const userSnap = await getDocs(collection(db, 'users'));
-      if (userSnap.empty) {
-        await setDoc(doc(db, 'users', 'Unicharm'), {
-          id: 'Unicharm',
-          password: 'Unicharm@123',
-          role: 'admin',
-        });
-        setUsers([{ id: 'Unicharm', password: 'Unicharm@123', role: 'admin' }]);
-      } else {
-        setUsers(userSnap.docs.map((d) => d.data() as User));
-      }
+      // 4. Fetch Users of this Company
+      const userQuery = query(collection(db, 'users'), where('companyId', '==', activeCompanyId));
+      const userSnap = await getDocs(userQuery);
+      setUsers(userSnap.docs.map((d) => d.data() as User));
     } catch (error) {
       console.error('Firebase Error:', error);
-      alert('Firebase se connect nahi ho pa raha. Rules check karo');
+      alert('Error fetching company data. Check internet/Firebase rules.');
     } finally {
       setLoading(false);
     }
   };
 
+  // REGISTER NEW COMPANY (SAAS SELF-ONBOARDING)
+  const handleRegisterCompany = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanCompanyId = regCompanyId.trim().toLowerCase().replace(/\s+/g, '-');
+    if (!cleanCompanyId || !regCompanyName || !regAdminPass) {
+      return alert('Saari fields fill karna zaroori hai!');
+    }
+
+    setLoading(true);
+    try {
+      const existingComp = await getDoc(doc(db, 'companies', cleanCompanyId));
+      if (existingComp.exists()) {
+        alert('Yeh Company ID pehle se li ja chuki hai. Koi doosri ID chunein.');
+        setLoading(false);
+        return;
+      }
+
+      // 1. Save Company
+      const newCompany: Company = {
+        id: cleanCompanyId,
+        name: regCompanyName.trim(),
+        createdAt: new Date().toISOString(),
+      };
+      await setDoc(doc(db, 'companies', cleanCompanyId), newCompany);
+
+      // 2. Create Default Admin User
+      const defaultAdmin: User = {
+        id: 'admin',
+        companyId: cleanCompanyId,
+        password: regAdminPass,
+        role: 'admin',
+      };
+      await setDoc(doc(db, 'users', `${cleanCompanyId}_admin`), defaultAdmin);
+
+      alert(`Company registered successfully! Aapka User ID 'admin' hai.`);
+      setCompanyId(cleanCompanyId);
+      setCompanyName(newCompany.name);
+      setRole('admin');
+      await loadCompanyData(cleanCompanyId);
+      setAuthMode('login');
+    } catch (err) {
+      console.error(err);
+      alert('Company register karne mein problem aayi.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // LOGIN HANDLER
   const handleLogin = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    setLoading(true);
-    const q = query(
-      collection(db, 'users'),
-      where('id', '==', loginId),
-      where('password', '==', loginPass)
-    );
-    const snap = await getDocs(q);
-    if (!snap.empty) {
-      const user = snap.docs[0].data() as User;
-      setRole(user.role);
-      if (user.role === 'guard') setGuardPage('home');
-      if (user.role === 'hr') setHrPage('home');
-      setLoginId('');
-      setLoginPass('');
-    } else {
-      alert('Wrong User ID or Password');
+    const cleanCompanyId = loginCompanyId.trim().toLowerCase().replace(/\s+/g, '-');
+    if (!cleanCompanyId || !loginId || !loginPass) {
+      return alert('Company ID, User ID aur Password sab bharna zaroori hai');
     }
-    setLoading(false);
+
+    setLoading(true);
+    try {
+      const q = query(
+        collection(db, 'users'),
+        where('companyId', '==', cleanCompanyId),
+        where('id', '==', loginId),
+        where('password', '==', loginPass)
+      );
+      const snap = await getDocs(q);
+
+      if (!snap.empty) {
+        const user = snap.docs[0].data() as User;
+        setCompanyId(cleanCompanyId);
+        setRole(user.role);
+        await loadCompanyData(cleanCompanyId);
+
+        if (user.role === 'guard') setGuardPage('home');
+        if (user.role === 'hr') setHrPage('home');
+        setLoginPass('');
+      } else {
+        alert('Galat Company ID, User ID ya Password!');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Login error. Rules check karein.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const createUser = async (roleToCreate: 'guard' | 'hr') => {
@@ -180,60 +301,60 @@ export default function App() {
     const currentGuardCount = users.filter((u) => u.role === 'guard').length;
 
     if (roleToCreate === 'hr' && currentHRCount >= MAX_HR_USERS) {
-      return alert(`LIMIT EXCEEDED: Aap maximum ${MAX_HR_USERS} HR users hi bana sakte hain.`);
+      return alert(`LIMIT EXCEEDED: Maximum ${MAX_HR_USERS} HR users allowed.`);
     }
 
     if (roleToCreate === 'guard' && currentGuardCount >= MAX_GUARD_USERS) {
-      return alert(`LIMIT EXCEEDED: Aap maximum ${MAX_GUARD_USERS} Security users hi bana sakte hain.`);
+      return alert(`LIMIT EXCEEDED: Maximum ${MAX_GUARD_USERS} Security users allowed.`);
     }
 
     if (users.find((u) => u.id === newUserId)) {
-      return alert('User ID already exists');
+      return alert('Yeh User ID is company mein pehle se maujood hai');
     }
 
-    const newUser = {
+    const newUser: User = {
       id: newUserId,
+      companyId: companyId,
       password: newUserPass,
       role: roleToCreate,
     };
-    await setDoc(doc(db, 'users', newUserId), newUser);
+    await setDoc(doc(db, 'users', `${companyId}_${newUserId}`), newUser);
     setUsers([...users, newUser]);
-    alert(`${roleToCreate.toUpperCase()} user created successfully`);
+    alert(`${roleToCreate.toUpperCase()} user ban gaya!`);
     setNewUserId('');
     setNewUserPass('');
   };
 
   const resetPassword = async () => {
     if (!resetUserId || !resetUserPass) return alert('Fill ID and Password');
-    if (!users.find((u) => u.id === resetUserId))
-      return alert('User ID does not exist');
-    await updateDoc(doc(db, 'users', resetUserId), { password: resetUserPass });
-    setUsers(
-      users.map((u) =>
-        u.id === resetUserId ? { ...u, password: resetUserPass } : u
-      )
-    );
-    alert('Password reset successful');
+    const existing = users.find((u) => u.id === resetUserId);
+    if (!existing) return alert('User ID nahi mila');
+
+    await updateDoc(doc(db, 'users', `${companyId}_${resetUserId}`), { password: resetUserPass });
+    setUsers(users.map((u) => (u.id === resetUserId ? { ...u, password: resetUserPass } : u)));
+    alert('Password successfully reset ho gaya');
     setResetUserId('');
     setResetUserPass('');
   };
 
   const saveEmployee = async () => {
-    if (!newEmp.name || !newEmp.empId || !newEmp.dept)
-      return alert('All fields required');
+    if (!newEmp.name || !newEmp.empId || !newEmp.dept) return alert('All fields required');
 
     if (employees.length >= MAX_EMPLOYEES) {
       return alert(`LIMIT EXCEEDED: Maximum ${MAX_EMPLOYEES} employees limit reached.`);
     }
 
-    if (employees.find((e) => e.empId === newEmp.empId))
+    if (employees.find((e) => e.empId === newEmp.empId)) {
       return alert('Employee ID already exists');
+    }
 
     const empData: Employee = {
       ...newEmp,
-      qrData: JSON.stringify({ empId: newEmp.empId, name: newEmp.name }),
+      companyId: companyId,
+      qrData: JSON.stringify({ companyId: companyId, empId: newEmp.empId, name: newEmp.name }),
     };
-    await setDoc(doc(db, 'employee', newEmp.empId), empData);
+
+    await setDoc(doc(db, 'employee', `${companyId}_${newEmp.empId}`), empData);
     setEmployees([...employees, empData]);
     setGeneratedQR(empData);
     setNewEmp({ name: '', empId: '', dept: '' });
@@ -248,7 +369,7 @@ export default function App() {
 
     setLoading(true);
     try {
-      await deleteDoc(doc(db, 'employee', removeEmpId));
+      await deleteDoc(doc(db, 'employee', `${companyId}_${removeEmpId}`));
       setEmployees((prev) => prev.filter((e) => e.empId !== removeEmpId));
       alert('Employee removed successfully');
       setRemoveEmpId('');
@@ -272,16 +393,15 @@ export default function App() {
 
   const triggerPrint = () => window.print();
 
-  // DOWNLOAD STICKER IN EXACT 8cm x 6cm STICKER RATIO (600px x 800px Canvas)
+  // DOWNLOAD STICKER IN 8cm x 6cm (WITH DYNAMIC COMPANY NAME)
   const downloadCardImage = (emp: Employee) => {
     const qrCanvas = document.getElementById('employee-qr-canvas') as HTMLCanvasElement;
     if (!qrCanvas) return alert('QR Code canvas not ready');
-    
+
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Canvas size for 6 cm width x 8 cm height (Standard Portrait Sticker)
     const width = 600;
     const height = 800;
     canvas.width = width;
@@ -298,14 +418,14 @@ export default function App() {
 
     ctx.textAlign = 'center';
 
-    // 1. Company Name
+    // 1. Dynamic Company Name
     ctx.fillStyle = '#000000';
-    ctx.font = 'bold 38px sans-serif';
-    ctx.fillText(COMPANY_NAME.toUpperCase(), width / 2, 80);
+    ctx.font = 'bold 36px sans-serif';
+    ctx.fillText(companyName.toUpperCase(), width / 2, 80);
 
     ctx.fillStyle = '#2563eb';
     ctx.font = 'bold 20px sans-serif';
-    ctx.fillText('GATEPASS STICKER', width / 2, 115);
+    ctx.fillText('OFFICIAL GATEPASS', width / 2, 115);
 
     ctx.strokeStyle = '#cbd5e1';
     ctx.lineWidth = 3;
@@ -337,12 +457,12 @@ export default function App() {
     // Bottom Footer
     ctx.fillStyle = '#64748b';
     ctx.font = 'bold 18px sans-serif';
-    ctx.fillText('Unicharm Security Approved', width / 2, 740);
+    ctx.fillText('Authorized Gate Access', width / 2, 740);
 
     const image = canvas.toDataURL('image/png');
     const a = document.createElement('a');
     a.href = image;
-    a.download = `Sticker_8x6cm_${emp.empId}.png`;
+    a.download = `${companyName}_Sticker_${emp.empId}.png`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -359,7 +479,7 @@ export default function App() {
     });
     const empExists = employees.find((e) => e.empId === empId);
     if (!empExists) {
-      alert('Employee ID not found in system');
+      alert('Employee ID is company ke record mein nahi mila!');
       return false;
     }
 
@@ -378,6 +498,7 @@ export default function App() {
     }
 
     const newRecord: AttendanceRecord = {
+      companyId: companyId,
       empId,
       date: dateStr,
       time: timeStr,
@@ -409,6 +530,12 @@ export default function App() {
 
             try {
               const data = JSON.parse(decodedText);
+              // Multi-tenant check: QR code must belong to this company
+              if (data.companyId && data.companyId !== companyId) {
+                alert('Warning: Yeh QR code doosri company ka hai!');
+                isScanningRef.current = false;
+                return;
+              }
               await markAttendance(data.empId, type);
             } catch {
               alert('Invalid QR Code');
@@ -456,7 +583,7 @@ export default function App() {
     return `${hrs}h ${mins}m`;
   };
 
-  // MASTER EXCEL EXPORT LOGIC
+  // DYNAMIC MASTER EXCEL EXPORT
   const exportAttendance = () => {
     if (employees.length === 0) return alert('No employees found');
     const now = new Date();
@@ -469,7 +596,7 @@ export default function App() {
     });
     const today = now.getDate();
 
-    const titleRow = [`${COMPANY_NAME.toUpperCase()} - MASTER ATTENDANCE REGISTER`];
+    const titleRow = [`${companyName.toUpperCase()} - MASTER ATTENDANCE REGISTER`];
     const subTitleRow = [`Month: ${monthName}`, `Generated Date: ${now.toLocaleDateString('en-IN')}`];
     const emptyRow = [''];
 
@@ -506,16 +633,14 @@ export default function App() {
           totalMonthMinutes += mins;
           const durationFormatted = formatMinutes(mins);
 
-          // STRICT CONDITION: Must be >= 480 Mins (8 Hours) to be counted PRESENT
           if (mins >= 480) {
-            presentDaysCount++; // 8 Hours completed + OUT punch
+            presentDaysCount++;
             row.push(`🟢 IN:${inRec.time} OUT:${outRec.time} (${durationFormatted}) [8h+ OK]`);
           } else {
-            absentDaysCount++; // Less than 8 hours -> NOT PRESENT
+            absentDaysCount++;
             row.push(`🟡 IN:${inRec.time} OUT:${outRec.time} (${durationFormatted}) [<8h Short]`);
           }
         } else if (inRec) {
-          // NO OUT RECORD -> NOT PRESENT
           absentDaysCount++;
           row.push(`🔴 IN:${inRec.time} (No OUT)`);
         } else {
@@ -532,108 +657,89 @@ export default function App() {
 
     const ws = XLSX.utils.aoa_to_sheet(sheetData);
 
-    const colWidths: any[] = [
-      { wch: 8 },
-      { wch: 12 },
-      { wch: 22 },
-      { wch: 16 },
-    ];
-
+    const colWidths: any[] = [{ wch: 8 }, { wch: 12 }, { wch: 22 }, { wch: 16 }];
     for (let day = 1; day <= daysInMonth; day++) {
       colWidths.push({ wch: 28 });
     }
-    colWidths.push({ wch: 16 });
-    colWidths.push({ wch: 16 });
-    colWidths.push({ wch: 20 });
-
+    colWidths.push({ wch: 16 }, { wch: 16 }, { wch: 20 });
     ws['!cols'] = colWidths;
 
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Attendance Register');
-    XLSX.writeFile(wb, `${COMPANY_NAME}_Attendance_${monthName}.xlsx`);
-    alert('Master Sheet Downloaded Successfully! (Only 8h+ duty with OUT are counted as Present)');
+    XLSX.writeFile(wb, `${companyName.replace(/\s+/g, '_')}_Attendance_${monthName}.xlsx`);
+    alert('Master Sheet Downloaded Successfully!');
   };
 
   const styles: Record<string, React.CSSProperties> = {
     container: {
       minHeight: '100vh',
-      backgroundSize: 'cover',
-      backgroundPosition: 'center',
-      backgroundRepeat: 'no-repeat',
-      backgroundAttachment: 'fixed',
-      color: '#000',
-      fontFamily: 'system-ui',
+      backgroundColor: '#f8fafc',
+      color: '#0f172a',
+      fontFamily: 'system-ui, -apple-system, sans-serif',
       display: 'flex',
       flexDirection: 'column',
     },
     header: {
-      backgroundColor: 'rgba(255, 255, 255, 0.95)',
-      backdropFilter: 'blur(12px)',
-      borderBottom: '1px solid rgba(0, 0, 0, 0.1)',
+      backgroundColor: '#ffffff',
+      borderBottom: '1px solid #e2e8f0',
       position: 'sticky',
       top: 0,
       zIndex: 40,
-      padding: '12px 24px',
+      padding: '12px 20px',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'space-between',
-      boxShadow: '0 4px 12px rgba(0, 0, 0, 0.08)',
+      boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.05)',
     },
-    headerLeft: { display: 'flex', alignItems: 'center', gap: '12px' },
-    logoImage: {
-      height: '40px',
-      maxHeight: '40px',
-      width: 'auto',
-      maxWidth: '120px',
-      objectFit: 'contain',
-    },
+    headerLeft: { display: 'flex', alignItems: 'center', gap: '10px' },
     companyTitle: {
       margin: 0,
-      fontSize: '20px',
-      fontWeight: '900',
-      color: '#000000',
+      fontSize: '18px',
+      fontWeight: '800',
+      color: '#0f172a',
       letterSpacing: '-0.3px',
-      lineHeight: '1.2',
     },
     headerRight: {
       display: 'flex',
       alignItems: 'center',
-      gap: '16px',
+      gap: '12px',
       textAlign: 'right',
     },
     timeText: {
-      fontSize: '15px',
-      fontWeight: '900',
-      color: '#000',
+      fontSize: '14px',
+      fontWeight: '800',
+      color: '#0f172a',
       fontFamily: 'monospace',
     },
-    dateText: { fontSize: '12px', color: '#000', fontWeight: '700' },
-    glassCard: {
-      maxWidth: '420px',
+    dateText: { fontSize: '11px', color: '#64748b', fontWeight: '600' },
+    card: {
+      maxWidth: '440px',
       width: '100%',
-      borderRadius: '24px',
+      backgroundColor: '#ffffff',
+      borderRadius: '20px',
       padding: '24px 20px',
       textAlign: 'left',
       boxSizing: 'border-box',
+      border: '1px solid #e2e8f0',
+      boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03)',
     },
-    glassInputContainer: {
+    inputContainer: {
       position: 'relative',
       width: '100%',
-      margin: '4px 0 16px 0',
+      margin: '6px 0 14px 0',
     },
-    glassInput: {
+    input: {
       width: '100%',
-      padding: '12px 40px 12px 14px',
+      padding: '12px 14px',
       display: 'block',
-      backgroundColor: 'rgba(255, 255, 255, 0.85)',
-      border: '2px solid #cbd5e1',
-      borderRadius: '12px',
-      fontSize: '15px',
-      color: '#000',
-      fontWeight: '900',
+      backgroundColor: '#f8fafc',
+      border: '1.5px solid #cbd5e1',
+      borderRadius: '10px',
+      fontSize: '14px',
+      color: '#0f172a',
+      fontWeight: '700',
       outline: 'none',
       boxSizing: 'border-box',
-      textAlign: 'left',
     },
     eyeBtn: {
       position: 'absolute',
@@ -643,22 +749,24 @@ export default function App() {
       background: 'none',
       border: 'none',
       cursor: 'pointer',
-      color: '#475569',
+      color: '#64748b',
       display: 'flex',
       alignItems: 'center',
-      justifyContent: 'center',
       padding: 0,
     },
     btnPrimary: {
       width: '100%',
       padding: '12px',
       margin: '8px 0 0 0',
-      display: 'block',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: '8px',
       backgroundColor: '#2563eb',
       color: '#ffffff',
       border: 'none',
-      borderRadius: '12px',
-      fontWeight: '800',
+      borderRadius: '10px',
+      fontWeight: '700',
       fontSize: '14px',
       cursor: 'pointer',
     },
@@ -666,12 +774,15 @@ export default function App() {
       width: '100%',
       padding: '12px',
       margin: '8px 0 0 0',
-      display: 'block',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: '8px',
       backgroundColor: '#059669',
       color: '#ffffff',
       border: 'none',
-      borderRadius: '12px',
-      fontWeight: '800',
+      borderRadius: '10px',
+      fontWeight: '700',
       fontSize: '14px',
       cursor: 'pointer',
     },
@@ -679,12 +790,15 @@ export default function App() {
       width: '100%',
       padding: '12px',
       margin: '8px 0 0 0',
-      display: 'block',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: '8px',
       backgroundColor: '#dc2626',
       color: '#ffffff',
       border: 'none',
-      borderRadius: '12px',
-      fontWeight: '800',
+      borderRadius: '10px',
+      fontWeight: '700',
       fontSize: '14px',
       cursor: 'pointer',
     },
@@ -692,12 +806,15 @@ export default function App() {
       width: '100%',
       padding: '12px',
       margin: '8px 0 0 0',
-      display: 'block',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: '8px',
       backgroundColor: '#ffffff',
-      color: '#000000',
-      border: '2px solid #000',
-      borderRadius: '12px',
-      fontWeight: '900',
+      color: '#0f172a',
+      border: '1.5px solid #cbd5e1',
+      borderRadius: '10px',
+      fontWeight: '700',
       fontSize: '14px',
       cursor: 'pointer',
     },
@@ -708,10 +825,10 @@ export default function App() {
       transform: 'translate(-50%, -50%)',
       zIndex: 1000,
       backgroundColor: '#ffffff',
-      border: '2px solid #000',
+      border: '2px solid #0f172a',
       padding: '24px 28px',
       borderRadius: '20px',
-      boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.3)',
+      boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.25)',
       display: 'flex',
       flexDirection: 'column',
       alignItems: 'center',
@@ -720,26 +837,12 @@ export default function App() {
     },
   };
 
-  const dynamicContainerStyle: React.CSSProperties = {
-    ...styles.container,
-    backgroundImage: role === 'login' ? "url('/bg.jpg')" : '#f8fafc',
-    backgroundColor: role === 'login' ? 'transparent' : '#f8fafc',
-  };
-  const dynamicCardStyle: React.CSSProperties = {
-    ...styles.glassCard,
-    backgroundColor: role === 'login' ? 'rgba(255, 255, 255, 0.02)' : '#ffffff',
-    border:
-      role === 'login'
-        ? '2px solid rgba(255, 255, 255, 0.2)'
-        : '1px solid #cbd5e1',
-  };
-
   const hrCount = users.filter((u) => u.role === 'hr').length;
   const guardCount = users.filter((u) => u.role === 'guard').length;
 
   return (
-    <div style={dynamicContainerStyle}>
-      {/* PERFECT PRINT STYLING FOR 8cm x 6cm STICKER PAPER */}
+    <div style={styles.container}>
+      {/* 8cm x 6cm STICKER PRINT STYLE */}
       <style>{`
         @media print {
           @page {
@@ -771,7 +874,7 @@ export default function App() {
         }
       `}</style>
 
-      {/* Toast Popup on Scan */}
+      {/* Pop-up on Scan */}
       {showPopup && scanResult && (
         <div style={styles.toast}>
           <CheckCircle2
@@ -785,10 +888,8 @@ export default function App() {
             size={48}
           />
           <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: '14px', fontWeight: '800', color: '#000' }}>
-              {scanResult.empId !== 'Error'
-                ? `Emp ID: ${scanResult.empId}`
-                : ''}
+            <div style={{ fontSize: '14px', fontWeight: '800', color: '#0f172a' }}>
+              {scanResult.empId !== 'Error' ? `Emp ID: ${scanResult.empId}` : ''}
             </div>
             <div
               style={{
@@ -824,26 +925,37 @@ export default function App() {
         </div>
       )}
 
+      {/* Header Bar */}
       <header style={styles.header}>
         <div style={styles.headerLeft}>
-          <img
-            src="/logo.png"
-            alt="Logo"
-            style={styles.logoImage}
-            onError={(e) => {
-              (e.target as HTMLElement).style.display = 'none';
-            }}
-          />
-          <h1 style={styles.companyTitle}>{COMPANY_NAME}</h1>
+          <Building2 size={24} color="#2563eb" />
+          <h1 style={styles.companyTitle}>{companyName}</h1>
         </div>
         <div style={styles.headerRight}>
+          <button
+            onClick={handleInstallClick}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              background: '#eff6ff',
+              border: '1px solid #bfdbfe',
+              color: '#2563eb',
+              padding: '6px 10px',
+              borderRadius: '8px',
+              fontSize: '11px',
+              fontWeight: '700',
+              cursor: 'pointer',
+            }}
+          >
+            <Smartphone size={14} /> Install App
+          </button>
           <div>
             <div style={styles.dateText}>
               {currentTime.toLocaleDateString('en-IN', {
                 weekday: 'short',
                 day: 'numeric',
                 month: 'short',
-                year: 'numeric',
               })}
             </div>
             <div style={styles.timeText}>
@@ -860,7 +972,7 @@ export default function App() {
           flexDirection: 'column',
           justifyContent: 'center',
           alignItems: 'center',
-          padding: '20px 16px',
+          padding: '24px 16px',
         }}
       >
         {loading && (
@@ -868,75 +980,177 @@ export default function App() {
             style={{
               position: 'fixed',
               top: 50,
-              background: '#fff',
-              padding: '10px 20px',
-              borderRadius: 10,
+              background: '#0f172a',
+              color: '#fff',
+              padding: '10px 24px',
+              borderRadius: 30,
               zIndex: 100,
-              boxShadow: '0 4px 10px rgba(0,0,0,0.1)',
+              boxShadow: '0 10px 15px -3px rgba(0,0,0,0.2)',
+              fontSize: '13px',
+              fontWeight: '700',
             }}
           >
-            Loading...
+            Processing...
           </div>
         )}
 
-        {/* LOGIN SCREEN */}
+        {/* AUTH SCREEN (LOGIN OR CREATE COMPANY) */}
         {role === 'login' && (
-          <div style={dynamicCardStyle}>
-            <form onSubmit={handleLogin}>
-              <div style={styles.glassInputContainer}>
-                <input
-                  type="text"
-                  placeholder="User ID"
-                  value={loginId}
-                  onChange={(e) => setLoginId(e.target.value)}
-                  style={{ ...styles.glassInput, paddingRight: '14px' }}
-                />
-              </div>
-              <div style={styles.glassInputContainer}>
-                <input
-                  type={showLoginPass ? 'text' : 'password'}
-                  placeholder="Password"
-                  value={loginPass}
-                  onChange={(e) => setLoginPass(e.target.value)}
-                  style={styles.glassInput}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowLoginPass(!showLoginPass)}
-                  style={styles.eyeBtn}
-                >
-                  {showLoginPass ? <EyeOff size={18} /> : <Eye size={18} />}
+          <div style={styles.card}>
+            {authMode === 'login' ? (
+              <form onSubmit={handleLogin}>
+                <div style={{ textAlign: 'center', marginBottom: '20px' }}>
+                  <h2 style={{ fontSize: '20px', fontWeight: '800', margin: '0 0 6px 0' }}>Sign In</h2>
+                  <p style={{ fontSize: '13px', color: '#64748b', margin: 0 }}>
+                    Enter Company ID & Staff Credentials
+                  </p>
+                </div>
+
+                <label style={{ fontSize: '12px', fontWeight: '700', color: '#475569' }}>Company ID</label>
+                <div style={styles.inputContainer}>
+                  <input
+                    type="text"
+                    placeholder="e.g. sharma-tech"
+                    value={loginCompanyId}
+                    onChange={(e) => setLoginCompanyId(e.target.value)}
+                    style={styles.input}
+                    required
+                  />
+                </div>
+
+                <label style={{ fontSize: '12px', fontWeight: '700', color: '#475569' }}>User ID</label>
+                <div style={styles.inputContainer}>
+                  <input
+                    type="text"
+                    placeholder="e.g. admin or guard1"
+                    value={loginId}
+                    onChange={(e) => setLoginId(e.target.value)}
+                    style={styles.input}
+                    required
+                  />
+                </div>
+
+                <label style={{ fontSize: '12px', fontWeight: '700', color: '#475569' }}>Password</label>
+                <div style={styles.inputContainer}>
+                  <input
+                    type={showLoginPass ? 'text' : 'password'}
+                    placeholder="Password"
+                    value={loginPass}
+                    onChange={(e) => setLoginPass(e.target.value)}
+                    style={{ ...styles.input, paddingRight: '40px' }}
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowLoginPass(!showLoginPass)}
+                    style={styles.eyeBtn}
+                  >
+                    {showLoginPass ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
+                </div>
+
+                <button type="submit" style={styles.btnPrimary}>
+                  Sign In
                 </button>
-              </div>
-              <button type="submit" style={styles.btnPrimary}>
-                Sign In
-              </button>
-            </form>
+
+                <div style={{ textAlign: 'center', marginTop: '20px', paddingTop: '16px', borderTop: '1px solid #e2e8f0' }}>
+                  <span style={{ fontSize: '13px', color: '#64748b' }}>Nayi company shuru karni hai? </span>
+                  <button
+                    type="button"
+                    onClick={() => setAuthMode('registerCompany')}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#2563eb',
+                      fontWeight: '700',
+                      cursor: 'pointer',
+                      fontSize: '13px',
+                    }}
+                  >
+                    Register Company
+                  </button>
+                </div>
+              </form>
+            ) : (
+              /* REGISTER COMPANY (SELF SERVE ONBOARDING) */
+              <form onSubmit={handleRegisterCompany}>
+                <div style={{ textAlign: 'center', marginBottom: '20px' }}>
+                  <h2 style={{ fontSize: '20px', fontWeight: '800', margin: '0 0 6px 0' }}>Register Company</h2>
+                  <p style={{ fontSize: '13px', color: '#64748b', margin: 0 }}>
+                    Create your workspace in 30 seconds
+                  </p>
+                </div>
+
+                <label style={{ fontSize: '12px', fontWeight: '700', color: '#475569' }}>Company Unique ID (No spaces)</label>
+                <div style={styles.inputContainer}>
+                  <input
+                    type="text"
+                    placeholder="e.g. sharma-builders"
+                    value={regCompanyId}
+                    onChange={(e) => setRegCompanyId(e.target.value)}
+                    style={styles.input}
+                    required
+                  />
+                </div>
+
+                <label style={{ fontSize: '12px', fontWeight: '700', color: '#475569' }}>Full Company Name</label>
+                <div style={styles.inputContainer}>
+                  <input
+                    type="text"
+                    placeholder="e.g. Sharma Builders & Infra Pvt Ltd"
+                    value={regCompanyName}
+                    onChange={(e) => setRegCompanyName(e.target.value)}
+                    style={styles.input}
+                    required
+                  />
+                </div>
+
+                <label style={{ fontSize: '12px', fontWeight: '700', color: '#475569' }}>Admin Master Password</label>
+                <div style={styles.inputContainer}>
+                  <input
+                    type="password"
+                    placeholder="Set Master Password"
+                    value={regAdminPass}
+                    onChange={(e) => setRegAdminPass(e.target.value)}
+                    style={styles.input}
+                    required
+                  />
+                </div>
+
+                <button type="submit" style={styles.btnSuccess}>
+                  Create Workspace
+                </button>
+
+                <div style={{ textAlign: 'center', marginTop: '16px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setAuthMode('login')}
+                    style={styles.btnSecondary}
+                  >
+                    Back to Login
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         )}
 
         {/* ADMIN SCREEN */}
         {role === 'admin' && (
-          <div style={dynamicCardStyle}>
+          <div style={styles.card}>
             <div
               style={{
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center',
-                borderBottom: '2px solid #000',
+                borderBottom: '1px solid #e2e8f0',
                 paddingBottom: '16px',
               }}
             >
-              <h2
-                style={{
-                  fontSize: '18px',
-                  fontWeight: '900',
-                  margin: 0,
-                  color: '#000',
-                }}
-              >
-                Admin Panel
-              </h2>
+              <div>
+                <h2 style={{ fontSize: '18px', fontWeight: '800', margin: 0 }}>Admin Panel</h2>
+                <div style={{ fontSize: '12px', color: '#64748b' }}>Company ID: {companyId}</div>
+              </div>
               <button
                 onClick={() => setRole('login')}
                 style={{
@@ -949,39 +1163,31 @@ export default function App() {
                 <LogOut size={22} />
               </button>
             </div>
+
             <div style={{ padding: '20px 0', textAlign: 'left' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <h3
-                  style={{
-                    fontSize: '14px',
-                    fontWeight: '900',
-                    marginBottom: '8px',
-                    color: '#000',
-                  }}
-                >
-                  Create User
-                </h3>
+              <h3 style={{ fontSize: '14px', fontWeight: '800', marginBottom: '8px' }}>
+                Create HR or Security User
+              </h3>
+
+              <div style={{ fontSize: '11px', color: '#64748b', marginBottom: '12px', fontWeight: 'bold' }}>
+                HR Staff: {hrCount}/{MAX_HR_USERS} | Guard Staff: {guardCount}/{MAX_GUARD_USERS}
               </div>
 
-              <div style={{ fontSize: '11px', color: '#475569', marginBottom: '12px', fontWeight: 'bold' }}>
-                HR Users: {hrCount}/{MAX_HR_USERS} | Security Users: {guardCount}/{MAX_GUARD_USERS}
-              </div>
-
-              <div style={styles.glassInputContainer}>
+              <div style={styles.inputContainer}>
                 <input
-                  placeholder="New User ID"
+                  placeholder="New User ID (e.g. guard_gate1)"
                   value={newUserId}
                   onChange={(e) => setNewUserId(e.target.value)}
-                  style={{ ...styles.glassInput, paddingRight: '14px' }}
+                  style={styles.input}
                 />
               </div>
-              <div style={styles.glassInputContainer}>
+              <div style={styles.inputContainer}>
                 <input
                   type={showNewUserPass ? 'text' : 'password'}
                   placeholder="Password"
                   value={newUserPass}
                   onChange={(e) => setNewUserPass(e.target.value)}
-                  style={styles.glassInput}
+                  style={{ ...styles.input, paddingRight: '40px' }}
                 />
                 <button
                   type="button"
@@ -991,53 +1197,36 @@ export default function App() {
                   {showNewUserPass ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>
               </div>
+
               <div style={{ display: 'flex', gap: '10px' }}>
-                <button
-                  onClick={() => createUser('hr')}
-                  style={{ ...styles.btnPrimary, width: '48%' }}
-                >
-                  HR ({hrCount}/{MAX_HR_USERS})
+                <button onClick={() => createUser('hr')} style={{ ...styles.btnPrimary, width: '48%' }}>
+                  + HR User
                 </button>
-                <button
-                  onClick={() => createUser('guard')}
-                  style={{ ...styles.btnSuccess, width: '48%' }}
-                >
-                  Security ({guardCount}/{MAX_GUARD_USERS})
+                <button onClick={() => createUser('guard')} style={{ ...styles.btnSuccess, width: '48%' }}>
+                  + Guard User
                 </button>
               </div>
 
-              <hr
-                style={{
-                  border: 'none',
-                  borderTop: '2px solid #000',
-                  margin: '24px 0',
-                }}
-              />
-              <h3
-                style={{
-                  fontSize: '14px',
-                  fontWeight: '900',
-                  marginBottom: '8px',
-                  color: '#000',
-                }}
-              >
-                Reset Password
+              <hr style={{ border: 'none', borderTop: '1px solid #e2e8f0', margin: '24px 0' }} />
+
+              <h3 style={{ fontSize: '14px', fontWeight: '800', marginBottom: '8px' }}>
+                Reset User Password
               </h3>
-              <div style={styles.glassInputContainer}>
+              <div style={styles.inputContainer}>
                 <input
                   placeholder="User ID"
                   value={resetUserId}
                   onChange={(e) => setResetUserId(e.target.value)}
-                  style={{ ...styles.glassInput, paddingRight: '14px' }}
+                  style={styles.input}
                 />
               </div>
-              <div style={styles.glassInputContainer}>
+              <div style={styles.inputContainer}>
                 <input
                   type={showResetUserPass ? 'text' : 'password'}
                   placeholder="New Password"
                   value={resetUserPass}
                   onChange={(e) => setResetUserPass(e.target.value)}
-                  style={styles.glassInput}
+                  style={{ ...styles.input, paddingRight: '40px' }}
                 />
                 <button
                   type="button"
@@ -1051,7 +1240,7 @@ export default function App() {
                 onClick={resetPassword}
                 style={{ ...styles.btnPrimary, backgroundColor: '#d97706' }}
               >
-                Reset Password
+                Update Password
               </button>
             </div>
           </div>
@@ -1059,7 +1248,7 @@ export default function App() {
 
         {/* HR SCREEN */}
         {role === 'hr' && (
-          <div style={dynamicCardStyle}>
+          <div style={styles.card}>
             {!generatedQR ? (
               <div>
                 <div
@@ -1067,28 +1256,13 @@ export default function App() {
                     display: 'flex',
                     justifyContent: 'space-between',
                     alignItems: 'center',
-                    borderBottom: '2px solid #000',
+                    borderBottom: '1px solid #e2e8f0',
                     paddingBottom: '16px',
                   }}
                 >
-                  <div
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '10px',
-                    }}
-                  >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                     <Users color="#2563eb" size={24} />
-                    <h2
-                      style={{
-                        fontSize: '18px',
-                        fontWeight: '900',
-                        margin: 0,
-                        color: '#000',
-                      }}
-                    >
-                      HR Management
-                    </h2>
+                    <h2 style={{ fontSize: '18px', fontWeight: '800', margin: 0 }}>HR Management</h2>
                   </div>
                   <button
                     onClick={() => setRole('login')}
@@ -1102,46 +1276,24 @@ export default function App() {
                     <LogOut size={22} />
                   </button>
                 </div>
+
                 <div style={{ padding: '20px 0' }}>
                   {hrPage === 'home' && (
-                    <div
-                      style={{
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '12px',
-                      }}
-                    >
-                      <button
-                        onClick={() => setHrPage('createEmp')}
-                        style={styles.btnSecondary}
-                      >
-                        <UserPlus size={18} /> Create Employee ({employees.length}/{MAX_EMPLOYEES})
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      <button onClick={() => setHrPage('createEmp')} style={styles.btnPrimary}>
+                        <UserPlus size={18} /> Add Employee ({employees.length}/{MAX_EMPLOYEES})
                       </button>
-                      <button
-                        onClick={() => setHrPage('removeEmp')}
-                        style={{ ...styles.btnSecondary, color: '#000000', borderColor: '#000000' }}
-                      >
+                      <button onClick={() => setHrPage('removeEmp')} style={styles.btnSecondary}>
                         <UserMinus size={18} /> Remove Employee
                       </button>
-
-                      <button
-                        onClick={() => setHrPage('reprintEmp')}
-                        style={{ ...styles.btnSecondary, backgroundColor: '#f8fafc' }}
-                      >
-                        <QrCode size={18} /> Reprint QR Card
+                      <button onClick={() => setHrPage('reprintEmp')} style={styles.btnSecondary}>
+                        <QrCode size={18} /> Reprint Sticker
                       </button>
-
-                      <button
-                        onClick={exportAttendance}
-                        style={styles.btnSecondary}
-                      >
-                        <FileSpreadsheet size={18} /> Master Attendance
+                      <button onClick={exportAttendance} style={styles.btnSuccess}>
+                        <FileSpreadsheet size={18} /> Export Master Excel
                       </button>
-                      <button
-                        onClick={() => setHrPage('headcount')}
-                        style={styles.btnSecondary}
-                      >
-                        <UserCheck size={18} /> Head Count
+                      <button onClick={() => setHrPage('headcount')} style={styles.btnSecondary}>
+                        <UserCheck size={18} /> Headcount
                       </button>
                     </div>
                   )}
@@ -1149,39 +1301,30 @@ export default function App() {
                   {hrPage === 'createEmp' && (
                     <div style={{ textAlign: 'left' }}>
                       <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#2563eb', marginBottom: '8px' }}>
-                        Total Employees Added: {employees.length} / {MAX_EMPLOYEES}
+                        Staff Added: {employees.length} / {MAX_EMPLOYEES}
                       </div>
                       <input
                         placeholder="Employee Name"
                         value={newEmp.name}
-                        onChange={(e) =>
-                          setNewEmp({ ...newEmp, name: e.target.value })
-                        }
-                        style={{ ...styles.glassInput, paddingRight: '14px', margin: '4px 0 16px 0' }}
+                        onChange={(e) => setNewEmp({ ...newEmp, name: e.target.value })}
+                        style={styles.input}
                       />
                       <input
                         placeholder="Employee ID"
                         value={newEmp.empId}
-                        onChange={(e) =>
-                          setNewEmp({ ...newEmp, empId: e.target.value })
-                        }
-                        style={{ ...styles.glassInput, paddingRight: '14px', margin: '4px 0 16px 0' }}
+                        onChange={(e) => setNewEmp({ ...newEmp, empId: e.target.value })}
+                        style={styles.input}
                       />
                       <input
                         placeholder="Department"
                         value={newEmp.dept}
-                        onChange={(e) =>
-                          setNewEmp({ ...newEmp, dept: e.target.value })
-                        }
-                        style={{ ...styles.glassInput, paddingRight: '14px', margin: '4px 0 16px 0' }}
+                        onChange={(e) => setNewEmp({ ...newEmp, dept: e.target.value })}
+                        style={styles.input}
                       />
                       <button onClick={saveEmployee} style={styles.btnSuccess}>
-                        Generate Employee
+                        Generate Gatepass QR
                       </button>
-                      <button
-                        onClick={() => setHrPage('home')}
-                        style={styles.btnSecondary}
-                      >
+                      <button onClick={() => setHrPage('home')} style={styles.btnSecondary}>
                         Back
                       </button>
                     </div>
@@ -1189,22 +1332,19 @@ export default function App() {
 
                   {hrPage === 'removeEmp' && (
                     <div style={{ textAlign: 'left' }}>
-                      <h3 style={{ fontSize: '15px', fontWeight: '900', color: '#dc2626', marginBottom: '10px' }}>
+                      <h3 style={{ fontSize: '15px', fontWeight: '800', color: '#dc2626' }}>
                         Remove Employee
                       </h3>
                       <input
                         placeholder="Enter Employee ID"
                         value={removeEmpId}
                         onChange={(e) => setRemoveEmpId(e.target.value)}
-                        style={{ ...styles.glassInput, paddingRight: '14px', margin: '4px 0 16px 0' }}
+                        style={styles.input}
                       />
                       <button onClick={deleteEmployee} style={styles.btnDanger}>
-                        Remove Employee
+                        Delete Permanently
                       </button>
-                      <button
-                        onClick={() => setHrPage('home')}
-                        style={styles.btnSecondary}
-                      >
+                      <button onClick={() => setHrPage('home')} style={styles.btnSecondary}>
                         Back
                       </button>
                     </div>
@@ -1212,25 +1352,17 @@ export default function App() {
 
                   {hrPage === 'reprintEmp' && (
                     <div style={{ textAlign: 'left' }}>
-                      <h3 style={{ fontSize: '15px', fontWeight: '900', color: '#2563eb', marginBottom: '10px' }}>
-                        Reprint QR Card
-                      </h3>
-                      <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '8px' }}>
-                        Enter Employee ID to get their QR gatepass card again.
-                      </div>
+                      <h3 style={{ fontSize: '15px', fontWeight: '800' }}>Reprint QR Gatepass</h3>
                       <input
                         placeholder="Enter Employee ID"
                         value={reprintEmpId}
                         onChange={(e) => setReprintEmpId(e.target.value)}
-                        style={{ ...styles.glassInput, paddingRight: '14px', margin: '4px 0 16px 0' }}
+                        style={styles.input}
                       />
                       <button onClick={handleReprintCard} style={styles.btnPrimary}>
-                        Search & Print Card
+                        Search & Display Sticker
                       </button>
-                      <button
-                        onClick={() => setHrPage('home')}
-                        style={styles.btnSecondary}
-                      >
+                      <button onClick={() => setHrPage('home')} style={styles.btnSecondary}>
                         Back
                       </button>
                     </div>
@@ -1238,29 +1370,13 @@ export default function App() {
 
                   {hrPage === 'headcount' && (
                     <div style={{ textAlign: 'center', padding: '20px 0' }}>
-                      <div
-                        style={{
-                          fontSize: '14px',
-                          color: '#000',
-                          fontWeight: '900',
-                        }}
-                      >
-                        Total Registered Employees
+                      <div style={{ fontSize: '13px', color: '#64748b', fontWeight: '700' }}>
+                        Registered Staff in Database
                       </div>
-                      <div
-                        style={{
-                          fontSize: '48px',
-                          fontWeight: '900',
-                          color: '#2563eb',
-                          margin: '10px 0',
-                        }}
-                      >
+                      <div style={{ fontSize: '48px', fontWeight: '900', color: '#2563eb', margin: '10px 0' }}>
                         {employees.length} <span style={{ fontSize: '16px', color: '#64748b' }}>/ {MAX_EMPLOYEES}</span>
                       </div>
-                      <button
-                        onClick={() => setHrPage('home')}
-                        style={styles.btnSecondary}
-                      >
+                      <button onClick={() => setHrPage('home')} style={styles.btnSecondary}>
                         Back
                       </button>
                     </div>
@@ -1268,7 +1384,7 @@ export default function App() {
                 </div>
               </div>
             ) : (
-              /* CARD PREVIEW AREA - PERFECT 8CM X 6CM STICKER BOX */
+              /* DYNAMIC 8CM X 6CM STICKER PREVIEW */
               <div style={{ textAlign: 'center' }}>
                 <div
                   id="printable-card-area"
@@ -1280,8 +1396,8 @@ export default function App() {
                     border: '2px solid #000',
                     margin: '0 auto 16px auto',
                     textAlign: 'center',
-                    width: '210px', // Perfectly scaled preview for 6cm
-                    height: '280px', // Perfectly scaled preview for 8cm
+                    width: '210px',
+                    height: '280px',
                     display: 'flex',
                     flexDirection: 'column',
                     alignItems: 'center',
@@ -1289,71 +1405,47 @@ export default function App() {
                     boxSizing: 'border-box',
                   }}
                 >
-                  {/* 1. Company Name & Header */}
                   <div>
                     <div
                       style={{
-                        fontSize: '16px',
+                        fontSize: '15px',
                         fontWeight: '900',
                         textTransform: 'uppercase',
                         color: '#000',
-                        lineHeight: '1.1',
-                        letterSpacing: '0.5px',
+                        lineHeight: '1.2',
                       }}
                     >
-                      {COMPANY_NAME}
+                      {companyName}
                     </div>
-                    <div
-                      style={{
-                        fontSize: '9px',
-                        color: '#2563eb',
-                        fontWeight: '800',
-                        marginTop: '2px',
-                      }}
-                    >
+                    <div style={{ fontSize: '9px', color: '#2563eb', fontWeight: '800', marginTop: '2px' }}>
                       GATEPASS STICKER
                     </div>
                   </div>
 
                   <hr style={{ width: '90%', border: 'none', borderTop: '1px solid #cbd5e1', margin: '2px 0' }} />
 
-                  {/* 2. Employee Details */}
                   <div style={{ fontSize: '11px', color: '#000', fontWeight: '800', lineHeight: '1.4', width: '100%' }}>
                     <div><b>ID:</b> {generatedQR.empId}</div>
                     <div><b>Name:</b> {generatedQR.name.length > 16 ? generatedQR.name.substring(0, 16) + '..' : generatedQR.name}</div>
                     <div><b>Dept:</b> {generatedQR.dept}</div>
                   </div>
 
-                  {/* 3. QR Code */}
                   <div style={{ margin: '4px 0' }}>
-                    <QRCodeCanvas
-                      id="employee-qr-canvas"
-                      value={generatedQR.qrData}
-                      size={120}
-                    />
+                    <QRCodeCanvas id="employee-qr-canvas" value={generatedQR.qrData} size={120} />
                   </div>
                 </div>
 
-                <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#059669', marginBottom: '10px' }}>
-                  Sticker Print Size: 8 cm x 6 cm (Portrait)
+                <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#059669', marginBottom: '10px' }}>
+                  Standard Sticker Format: 8 cm x 6 cm (Portrait)
                 </div>
 
-                <button
-                  onClick={triggerPrint}
-                  style={{ ...styles.btnPrimary, backgroundColor: '#4f46e5' }}
-                >
+                <button onClick={triggerPrint} style={{ ...styles.btnPrimary, backgroundColor: '#4f46e5' }}>
                   <Printer size={18} /> Print 8x6cm Sticker
                 </button>
-                <button
-                  onClick={() => downloadCardImage(generatedQR)}
-                  style={styles.btnSuccess}
-                >
+                <button onClick={() => downloadCardImage(generatedQR)} style={styles.btnSuccess}>
                   <Download size={18} /> Download Sticker Image
                 </button>
-                <button
-                  onClick={() => setGeneratedQR(null)}
-                  style={styles.btnSecondary}
-                >
+                <button onClick={() => setGeneratedQR(null)} style={styles.btnSecondary}>
                   Back
                 </button>
               </div>
@@ -1361,28 +1453,22 @@ export default function App() {
           </div>
         )}
 
-        {/* SECURITY SCREEN */}
+        {/* SECURITY GATE SCREEN */}
         {role === 'guard' && (
-          <div style={dynamicCardStyle}>
+          <div style={styles.card}>
             <div
               style={{
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center',
-                borderBottom: '2px solid #000',
+                borderBottom: '1px solid #e2e8f0',
                 paddingBottom: '16px',
               }}
             >
-              <h2
-                style={{
-                  fontSize: '18px',
-                  fontWeight: '900',
-                  margin: 0,
-                  color: '#000',
-                }}
-              >
-                Security Gate
-              </h2>
+              <div>
+                <h2 style={{ fontSize: '18px', fontWeight: '800', margin: 0 }}>Gate Scanner</h2>
+                <div style={{ fontSize: '11px', color: '#64748b' }}>{companyName}</div>
+              </div>
               <button
                 onClick={() => setRole('login')}
                 style={{
@@ -1395,22 +1481,11 @@ export default function App() {
                 <LogOut size={22} />
               </button>
             </div>
+
             <div style={{ padding: '20px 0' }}>
               {guardPage === 'home' && (
-                <div
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '12px',
-                  }}
-                >
-                  <div
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: '1fr 1fr',
-                      gap: '12px',
-                    }}
-                  >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                     <button
                       onClick={() => {
                         setGuardPage('in');
@@ -1425,47 +1500,29 @@ export default function App() {
                         setGuardPage('out');
                         setGuardSubPage('');
                       }}
-                      style={{
-                        ...styles.btnPrimary,
-                        backgroundColor: '#dc2626',
-                      }}
+                      style={styles.btnDanger}
                     >
                       <Scan size={24} /> OUT
                     </button>
                   </div>
-                  <button
-                    onClick={() => setGuardPage('attendance')}
-                    style={styles.btnSecondary}
-                  >
-                    <Clock size={18} /> Attendance Log
+                  <button onClick={() => setGuardPage('attendance')} style={styles.btnSecondary}>
+                    <Clock size={18} /> Today's Log
                   </button>
-                  <button
-                    onClick={() => setGuardPage('headcount')}
-                    style={styles.btnSecondary}
-                  >
-                    <Users size={18} /> Headcount
+                  <button onClick={() => setGuardPage('headcount')} style={styles.btnSecondary}>
+                    <Users size={18} /> Live Inside
                   </button>
                 </div>
               )}
 
               {guardPage === 'in' && guardSubPage === '' && (
                 <div>
-                  <button
-                    onClick={() => startScanner('IN')}
-                    style={styles.btnSuccess}
-                  >
-                    Scan QR
+                  <button onClick={() => startScanner('IN')} style={styles.btnSuccess}>
+                    Start QR Camera (IN)
                   </button>
-                  <button
-                    onClick={() => setGuardSubPage('in-manual')}
-                    style={styles.btnSecondary}
-                  >
-                    Manual Entry
+                  <button onClick={() => setGuardSubPage('in-manual')} style={styles.btnSecondary}>
+                    Manual ID Entry
                   </button>
-                  <button
-                    onClick={() => setGuardPage('home')}
-                    style={styles.btnSecondary}
-                  >
+                  <button onClick={() => setGuardPage('home')} style={styles.btnSecondary}>
                     Back
                   </button>
                 </div>
@@ -1473,23 +1530,10 @@ export default function App() {
 
               {guardPage === 'in' && guardSubPage === 'in-qr' && (
                 <div>
-                  <h3
-                    style={{
-                      fontSize: '16px',
-                      fontWeight: '900',
-                      color: '#059669',
-                    }}
-                  >
-                    Scanning QR (IN)
+                  <h3 style={{ fontSize: '15px', fontWeight: '800', color: '#059669', marginBottom: '8px' }}>
+                    Scanning IN QR
                   </h3>
-                  <div
-                    id="reader-in"
-                    style={{
-                      borderRadius: '12px',
-                      overflow: 'hidden',
-                      border: '2px solid #059669',
-                    }}
-                  ></div>
+                  <div id="reader-in" style={{ borderRadius: '12px', overflow: 'hidden', border: '2px solid #059669' }}></div>
                   <button onClick={stopScanner} style={styles.btnSecondary}>
                     Close Camera
                   </button>
@@ -1499,24 +1543,15 @@ export default function App() {
               {guardPage === 'in' && guardSubPage === 'in-manual' && (
                 <div style={{ textAlign: 'left' }}>
                   <input
-                    placeholder="Employee ID"
+                    placeholder="Enter Employee ID"
                     value={manualEmpId}
                     onChange={(e) => setManualEmpId(e.target.value)}
-                    style={{ ...styles.glassInput, paddingRight: '14px', margin: '4px 0 16px 0' }}
+                    style={styles.input}
                   />
-                  <button
-                    onClick={() => markAttendance(manualEmpId, 'IN')}
-                    style={styles.btnSuccess}
-                  >
-                    IN
+                  <button onClick={() => markAttendance(manualEmpId, 'IN')} style={styles.btnSuccess}>
+                    Mark IN
                   </button>
-                  <button
-                    onClick={() => {
-                      setGuardSubPage('');
-                      setGuardPage('in');
-                    }}
-                    style={styles.btnSecondary}
-                  >
+                  <button onClick={() => setGuardPage('home')} style={styles.btnSecondary}>
                     Back
                   </button>
                 </div>
@@ -1524,22 +1559,13 @@ export default function App() {
 
               {guardPage === 'out' && guardSubPage === '' && (
                 <div>
-                  <button
-                    onClick={() => startScanner('OUT')}
-                    style={{ ...styles.btnPrimary, backgroundColor: '#dc2626' }}
-                  >
-                    Scan QR
+                  <button onClick={() => startScanner('OUT')} style={styles.btnDanger}>
+                    Start QR Camera (OUT)
                   </button>
-                  <button
-                    onClick={() => setGuardSubPage('out-manual')}
-                    style={styles.btnSecondary}
-                  >
-                    Manual OUT
+                  <button onClick={() => setGuardSubPage('out-manual')} style={styles.btnSecondary}>
+                    Manual ID Entry
                   </button>
-                  <button
-                    onClick={() => setGuardPage('home')}
-                    style={styles.btnSecondary}
-                  >
+                  <button onClick={() => setGuardPage('home')} style={styles.btnSecondary}>
                     Back
                   </button>
                 </div>
@@ -1547,23 +1573,10 @@ export default function App() {
 
               {guardPage === 'out' && guardSubPage === 'out-qr' && (
                 <div>
-                  <h3
-                    style={{
-                      fontSize: '16px',
-                      fontWeight: '900',
-                      color: '#dc2626',
-                    }}
-                  >
-                    Scanning QR (OUT)
+                  <h3 style={{ fontSize: '15px', fontWeight: '800', color: '#dc2626', marginBottom: '8px' }}>
+                    Scanning OUT QR
                   </h3>
-                  <div
-                    id="reader-out"
-                    style={{
-                      borderRadius: '12px',
-                      overflow: 'hidden',
-                      border: '2px solid #dc2626',
-                    }}
-                  ></div>
+                  <div id="reader-out" style={{ borderRadius: '12px', overflow: 'hidden', border: '2px solid #dc2626' }}></div>
                   <button onClick={stopScanner} style={styles.btnSecondary}>
                     Close Camera
                   </button>
@@ -1573,24 +1586,15 @@ export default function App() {
               {guardPage === 'out' && guardSubPage === 'out-manual' && (
                 <div style={{ textAlign: 'left' }}>
                   <input
-                    placeholder="Employee ID"
+                    placeholder="Enter Employee ID"
                     value={manualEmpId}
                     onChange={(e) => setManualEmpId(e.target.value)}
-                    style={{ ...styles.glassInput, paddingRight: '14px', margin: '4px 0 16px 0' }}
+                    style={styles.input}
                   />
-                  <button
-                    onClick={() => markAttendance(manualEmpId, 'OUT')}
-                    style={{ ...styles.btnPrimary, backgroundColor: '#dc2626' }}
-                  >
-                    OUT
+                  <button onClick={() => markAttendance(manualEmpId, 'OUT')} style={styles.btnDanger}>
+                    Mark OUT
                   </button>
-                  <button
-                    onClick={() => {
-                      setGuardSubPage('');
-                      setGuardPage('out');
-                    }}
-                    style={styles.btnSecondary}
-                  >
+                  <button onClick={() => setGuardPage('home')} style={styles.btnSecondary}>
                     Back
                   </button>
                 </div>
@@ -1598,80 +1602,48 @@ export default function App() {
 
               {guardPage === 'attendance' && (
                 <div>
-                  <h3
-                    style={{
-                      fontSize: '16px',
-                      fontWeight: '900',
-                      marginBottom: '12px',
-                    }}
-                  >
-                    Today's Log
-                  </h3>
-
+                  <h3 style={{ fontSize: '15px', fontWeight: '800', marginBottom: '12px' }}>Today's Scans</h3>
                   {(() => {
                     const todayData = attendance
-                      .filter(
-                        (a) => a.date === new Date().toISOString().split('T')[0]
-                      )
+                      .filter((a) => a.date === new Date().toISOString().split('T')[0])
                       .reverse();
 
-                    const totalPages = Math.ceil(
-                      todayData.length / ITEMS_PER_PAGE
-                    );
+                    const totalPages = Math.ceil(todayData.length / ITEMS_PER_PAGE);
                     const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
-                    const currentItems = todayData.slice(
-                      startIndex,
-                      startIndex + ITEMS_PER_PAGE
-                    );
+                    const currentItems = todayData.slice(startIndex, startIndex + ITEMS_PER_PAGE);
 
                     return (
                       <>
                         {currentItems.length === 0 ? (
-                          <div
-                            style={{
-                              textAlign: 'center',
-                              padding: '20px',
-                              color: '#666',
-                            }}
-                          >
-                            No records today
+                          <div style={{ textAlign: 'center', padding: '20px', color: '#64748b' }}>
+                            Aaj abhi tak koi punch nahi hua
                           </div>
                         ) : (
                           currentItems.map((a, i) => {
-                            const emp = employees.find(
-                              (e) => e.empId === a.empId
-                            );
+                            const emp = employees.find((e) => e.empId === a.empId);
                             return (
                               <div
                                 key={i}
                                 style={{
                                   padding: '10px',
-                                  border: '1px solid #000',
+                                  border: '1px solid #e2e8f0',
                                   margin: '6px 0',
                                   borderRadius: 8,
-                                  background:
-                                    a.type === 'IN' ? '#ecfdf5' : '#fef2f2',
+                                  background: a.type === 'IN' ? '#ecfdf5' : '#fef2f2',
+                                  textAlign: 'left',
                                 }}
                               >
-                                <div
-                                  style={{
-                                    fontWeight: '900',
-                                    fontSize: '14px',
-                                  }}
-                                >
-                                  {emp?.name || 'Unknown'} - {a.empId}
+                                <div style={{ fontWeight: '800', fontSize: '13px' }}>
+                                  {emp?.name || 'Staff'} - {a.empId}
                                 </div>
-                                <div
-                                  style={{ fontSize: '12px', color: '#555' }}
-                                >
+                                <div style={{ fontSize: '11px', color: '#64748b' }}>
                                   Dept: {emp?.dept || '-'} | Time: {a.time}
                                 </div>
                                 <div
                                   style={{
-                                    fontWeight: '900',
-                                    color:
-                                      a.type === 'IN' ? '#059669' : '#dc2626',
-                                    fontSize: '13px',
+                                    fontWeight: '800',
+                                    color: a.type === 'IN' ? '#059669' : '#dc2626',
+                                    fontSize: '12px',
                                   }}
                                 >
                                   {a.type}
@@ -1682,57 +1654,19 @@ export default function App() {
                         )}
 
                         {totalPages > 1 && (
-                          <div
-                            style={{
-                              display: 'flex',
-                              gap: '6px',
-                              justifyContent: 'center',
-                              marginTop: '12px',
-                              flexWrap: 'wrap',
-                            }}
-                          >
+                          <div style={{ display: 'flex', gap: '6px', justifyContent: 'center', marginTop: '12px' }}>
                             <button
-                              onClick={() =>
-                                setCurrentPage((p) => Math.max(1, p - 1))
-                              }
-                              style={{
-                                ...styles.btnSecondary,
-                                width: 'auto',
-                                padding: '6px 12px',
-                              }}
+                              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                              style={{ ...styles.btnSecondary, width: 'auto', padding: '6px 12px' }}
                             >
                               Prev
                             </button>
-                            {Array.from(
-                              { length: totalPages },
-                              (_, i) => i + 1
-                            ).map((page) => (
-                              <button
-                                key={page}
-                                onClick={() => setCurrentPage(page)}
-                                style={{
-                                  ...styles.btnSecondary,
-                                  width: 'auto',
-                                  padding: '6px 12px',
-                                  backgroundColor:
-                                    currentPage === page ? '#2563eb' : '#fff',
-                                  color: currentPage === page ? '#fff' : '#000',
-                                }}
-                              >
-                                {page}
-                              </button>
-                            ))}
+                            <span style={{ fontSize: '12px', alignSelf: 'center' }}>
+                              {currentPage} / {totalPages}
+                            </span>
                             <button
-                              onClick={() =>
-                                setCurrentPage((p) =>
-                                  Math.min(totalPages, p + 1)
-                                )
-                              }
-                              style={{
-                                ...styles.btnSecondary,
-                                width: 'auto',
-                                padding: '6px 12px',
-                              }}
+                              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                              style={{ ...styles.btnSecondary, width: 'auto', padding: '6px 12px' }}
                             >
                               Next
                             </button>
@@ -1756,38 +1690,16 @@ export default function App() {
 
               {guardPage === 'headcount' && (
                 <div style={{ textAlign: 'center', padding: '20px 0' }}>
-                  <div
-                    style={{
-                      fontSize: '14px',
-                      color: '#000',
-                      fontWeight: '900',
-                    }}
-                  >
-                    Employees Currently IN
+                  <div style={{ fontSize: '13px', color: '#64748b', fontWeight: '700' }}>
+                    Currently Inside Factory/Office
                   </div>
-                  <div
-                    style={{
-                      fontSize: '48px',
-                      fontWeight: '900',
-                      color: '#059669',
-                      margin: '10px 0',
-                    }}
-                  >
+                  <div style={{ fontSize: '48px', fontWeight: '900', color: '#059669', margin: '10px 0' }}>
                     {getHeadCount()}
                   </div>
-                  <div
-                    style={{
-                      fontSize: '12px',
-                      color: '#555',
-                      marginBottom: '16px',
-                    }}
-                  >
-                    Total Staff: {employees.length}
+                  <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '16px' }}>
+                    Total Enrolled: {employees.length}
                   </div>
-                  <button
-                    onClick={() => setGuardPage('home')}
-                    style={styles.btnSecondary}
-                  >
+                  <button onClick={() => setGuardPage('home')} style={styles.btnSecondary}>
                     Back
                   </button>
                 </div>
